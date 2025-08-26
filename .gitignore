@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.pyo
+*.pkl
+
+# Packaging / build
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Environments / local config
+.venv/
+.env
+.env.*
+.python-version
+
+# macOS
+.DS_Store
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# Project outputs
+audio/
+subs/
+subs_zh/
+burned/
+
+# Videos (ignore entire folder)
+videos/
+
+# uv
+.uv/
