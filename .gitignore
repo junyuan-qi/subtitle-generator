@@ -16,6 +16,7 @@ dist/
 .venv/
 .env
 .env.*
+!.env.example
 .python-version
 
 # macOS
