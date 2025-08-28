@@ -14,6 +14,37 @@ except Exception:
 
 
 # Lazy imports for SDKs to allow help/usage without deps installed
+_COLOR_ENABLED = sys.stdout.isatty() and os.getenv("NO_COLOR") is None
+
+
+def _style(text: str, code: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if _COLOR_ENABLED else text
+
+
+def _hdr(text: str) -> str:
+    return _style(text, "1;36")  # bold cyan
+
+
+def _warn(text: str) -> str:
+    return _style(text, "33")  # yellow
+
+
+def _ok(text: str) -> str:
+    return _style(text, "32")  # green
+
+
+def _act(text: str) -> str:
+    return _style(text, "35")  # magenta
+
+
+def _label(text: str) -> str:
+    return _style(text, "1")  # bold
+
+
+def _err(text: str) -> str:
+    return _style(text, "31")  # red
+
+
 def _require_openai_client():
     try:
         from openai import OpenAI  # type: ignore
@@ -33,7 +64,7 @@ def _require_gemini():
         raise
 
 
-SUPPORTED_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".m4v"}
+SUPPORTED_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm"}
 
 
 @dataclass
@@ -127,7 +158,7 @@ def find_videos(src_dir: str) -> List[str]:
 
 def extract_audio_ffmpeg(video_path: str, audio_path: str, overwrite: bool = False) -> None:
     if os.path.exists(audio_path) and not overwrite:
-        print(f"[audio] Skip exists: {audio_path}")
+        # Caller prints section + skip; keep function quiet on skip.
         return
     ensure_dirs(os.path.dirname(audio_path))
     cmd = [
@@ -138,7 +169,6 @@ def extract_audio_ffmpeg(video_path: str, audio_path: str, overwrite: bool = Fal
         "-vn",
         audio_path,
     ]
-    print(f"[ffmpeg] {' '.join(cmd)}")
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as e:
@@ -189,15 +219,16 @@ def burn_subtitles_ffmpeg(
     if force_style:
         filt += f":force_style={_ffmpeg_filter_quote(force_style)}"
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", video_path,
-        "-vf", filt,
-        "-c:a", "copy",
-        out_path,
-    ]
-    print(f"[burn] {' '.join(cmd)}")
+    # Choose codecs by output container
+    out_ext = os.path.splitext(out_path)[1].lower()
+    cmd = ["ffmpeg", "-y", "-i", video_path, "-vf", filt]
+    if out_ext == ".webm":
+        # WebM requires VP8/VP9 video and Vorbis/Opus audio. Use VP9 + Opus.
+        cmd += ["-c:v", "libvpx-vp9", "-b:v", "2M", "-c:a", "libopus"]
+    else:
+        # Default to H.264 for mp4/mov, and copy audio to preserve quality.
+        cmd += ["-c:v", "libx264", "-c:a", "copy"]
+    cmd += [out_path]
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as e:
@@ -239,6 +270,25 @@ def _ffprobe_duration_seconds(path: str) -> Optional[float]:
         return float(out) if out else None
     except Exception:
         return None
+
+
+def _lang_display_name(code: str) -> str:
+    """Return a human-friendly name for a language code (best effort)."""
+    mapping = {
+        "en": "English",
+        "zh": "Chinese",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "es": "Spanish",
+        "fr": "French",
+        "de": "German",
+        "it": "Italian",
+        "ru": "Russian",
+        "pt": "Portuguese",
+        "hi": "Hindi",
+        "ar": "Arabic",
+    }
+    return mapping.get(code.lower(), code)
 
 
 def _coerce_from_dict_methods(obj: Any) -> Optional[Dict[str, Any]]:
@@ -479,6 +529,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--burn-font-size", type=int, default=28, help="Font size for burned subtitles")
     parser.add_argument("--burn-margin-v", type=int, default=40, help="Vertical margin (bottom) for subtitles")
     parser.add_argument("--burn-fonts-dir", default=None, help="Directory with .ttf/.otf fonts to load (optional)")
+    parser.add_argument("--burn-format", default="mp4", choices=["mp4", "webm"], help="Container for burned output (default: mp4)")
 
     args = parser.parse_args(argv)
 
@@ -496,6 +547,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"No videos found in {args.src}")
         return 0
 
+    # Run header
+    print(_hdr("Kicking Off"))
+    print(f"{_label('Source:')} {args.src}")
+    print(f"{_label('Videos to process:')} {len(videos)}")
+    print(f"{_label('Burn-in:')} {'enabled' if args.burn_in else 'disabled'}")
+    if args.burn_in:
+        print(f"{_label('Output format:')} {args.burn_format}")
+
     for v in videos:
         base = os.path.splitext(os.path.basename(v))[0]
         safe_base = base
@@ -506,29 +565,41 @@ def main(argv: Optional[List[str]] = None) -> int:
         audio_path = os.path.join(args.audio, f"{safe_base}.wav")
         srt_path = os.path.join(args.subs, f"{safe_base}.srt")
         translated_srt_path = os.path.join(args.subs_lang, f"{safe_base}.{args.lang}.srt")
-        burned_out_path = os.path.join(args.burn_out, f"{safe_base}.{args.lang if args.burn_use=='translated' else 'orig'}.burned.mp4")
+        burned_ext = ".mp4" if args.burn_format == "mp4" else ".webm"
+        burned_out_path = os.path.join(
+            args.burn_out,
+            f"{safe_base}.{args.lang if args.burn_use=='translated' else 'orig'}.burned{burned_ext}"
+        )
 
-        print(f"\n=== Processing: {os.path.basename(v)} ===")
+        print(_label(f"File: {os.path.basename(v)}"))
+        print("")
 
         # 1) Extract audio
-        extract_audio_ffmpeg(v, audio_path, overwrite=args.overwrite)
+        print(_hdr("Processing Audio"))
+        if os.path.exists(audio_path) and not args.overwrite:
+            print(f"{_warn('Skip exists:')} {audio_path}\n")
+        else:
+            print(f"{_act('Writing:')} {audio_path}")
+            extract_audio_ffmpeg(v, audio_path, overwrite=args.overwrite)
+            print(f"{_ok('Wrote:')} {audio_path}\n")
 
         # 2) Transcribe to SRT
+        print(_hdr("Transcribing"))
         if not os.path.exists(srt_path) or args.overwrite:
-            print("[asr] Transcribing with OpenAI ...")
             segments = transcribe_openai_verbose_json(audio_path, model=args.asr_model)
             write_srt(segments, srt_path)
-            print(f"[asr] Wrote SRT: {srt_path}")
+            print(f"{_ok('Wrote:')} {srt_path}\n")
         else:
-            print(f"[asr] Skip exists: {srt_path}")
+            print(f"{_warn('Skip exists:')} {srt_path}\n")
 
         # 3) Translate SRT
+        lang_name = _lang_display_name(args.lang)
+        print(_hdr(f"Translating to {lang_name}"))
         if not os.path.exists(translated_srt_path) or args.overwrite:
-            print(f"[tx] Translating to {args.lang} with Gemini ...")
             translate_srt_with_gemini(srt_path, translated_srt_path, target_lang=args.lang, model_name=args.tx_model)
-            print(f"[tx] Wrote translated SRT: {translated_srt_path}")
+            print(f"{_ok('Wrote:')} {translated_srt_path}\n")
         else:
-            print(f"[tx] Skip exists: {translated_srt_path}")
+            print(f"{_warn('Skip exists:')} {translated_srt_path}\n")
 
         # 4) Burn subtitles back into video if requested
         if args.burn_in:
@@ -537,15 +608,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                 detected = _detect_default_font()
                 if not args.burn_font and detected.get("font_name"):
                     args.burn_font = detected["font_name"]  # type: ignore
-                    print(f"[burn] Using default font: {args.burn_font}")
                 if not args.burn_fonts_dir and detected.get("fonts_dir"):
                     args.burn_fonts_dir = detected["fonts_dir"]  # type: ignore
-                    print(f"[burn] Using fonts dir: {args.burn_fonts_dir}")
             srt_to_use = translated_srt_path if args.burn_use == "translated" else srt_path
-            if not os.path.exists(srt_to_use):
-                print(f"[burn] SRT not found: {srt_to_use}")
+            print(_hdr("Burning Subtitles"))
+            # Skip if burned output already exists unless --overwrite is set
+            if os.path.exists(burned_out_path) and not args.overwrite:
+                print(f"{_warn('Skip exists:')} {burned_out_path}\n")
+            elif not os.path.exists(srt_to_use):
+                print(f"{_err('SRT not found:')} {srt_to_use}\n")
             else:
-                print(f"[burn] Burning subtitles from {srt_to_use} ...")
+                if args.burn_font:
+                    print(f"{_label('Font:')} {args.burn_font}")
+                if args.burn_fonts_dir:
+                    print(f"{_label('Fonts dir:')} {args.burn_fonts_dir}")
                 burn_subtitles_ffmpeg(
                     video_path=v,
                     srt_path=srt_to_use,
@@ -555,9 +631,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     margin_v=args.burn_margin_v,
                     fonts_dir=args.burn_fonts_dir,
                 )
-                print(f"[burn] Wrote: {burned_out_path}")
+                print(f"{_ok('Wrote:')} {burned_out_path}\n")
 
-    print("\nAll done.")
+    print(_hdr("All done."))
     return 0
 
 

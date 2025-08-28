@@ -36,7 +36,7 @@ pip install -r requirements.txt
 
 ## Usage
 
-Place videos under `videos/` (default). Then run:
+Place videos under `videos/` (default). Supported inputs: mp4, mov, mkv, avi, m4v, webm. Then run:
 
 ```bash
 # .env is auto-loaded (python-dotenv). Place keys in .env:
@@ -53,15 +53,17 @@ uv run subtitle-gen \
   --asr-model whisper-1 \
   --tx-model gemini-2.5-flash
 
-# or via main.py wrapper
+# or via main.py wrapper (enables burn-in by default)
 uv run python main.py --src videos --lang zh
+
+Note: Running via `main.py` enables `--burn-in` automatically. Use the `subtitle-gen` CLI if you prefer not to burn-in by default, or pass the explicit CLI flags with `subtitle-gen`.
 ```
 
 Outputs:
 - `audio/<video>.wav`
 - `subs/<video>.srt` (original language)
 - `subs_zh/<video>.zh.srt` (translated)
- - `burned/<video>.<lang|orig>.burned.mp4` (optional burned-in)
+ - `burned/<video>.<lang|orig>.burned.<mp4|webm>` (optional burned-in; default mp4)
 
 ### Notes
 
@@ -84,13 +86,15 @@ uv run subtitle-gen \
   --burn-out burned \
   --burn-font "PingFang SC" \
   --burn-font-size 28 \
-  --burn-margin-v 40
+  --burn-margin-v 40 \
+  # optionally choose output container (default mp4)
+  --burn-format webm
 ```
 
 Single-line equivalent:
 
 ```bash
-uv run subtitle-gen --src videos --lang zh --burn-in --burn-use translated --burn-out burned --burn-font "PingFang SC" --burn-font-size 28 --burn-margin-v 40
+uv run subtitle-gen --src videos --lang zh --burn-in --burn-use translated --burn-out burned --burn-font "PingFang SC" --burn-font-size 28 --burn-margin-v 40 --burn-format mp4
 ```
 
 Notes:
@@ -100,6 +104,7 @@ Notes:
   - Put `.otf/.ttf` files under `fonts/` (e.g., `fonts/NotoSansCJKsc-Regular.otf`).
   - Add `--burn-fonts-dir fonts --burn-font "Noto Sans CJK SC"`.
 - Output files go to `burned/` by default.
+ - Burned output format is set via `--burn-format {mp4,webm}` (default: mp4). WebM uses VP9 video + Opus audio (requires ffmpeg with libvpx/libopus).
 
 Auto-defaults
 - If a bundled font directory is present at `fonts/Noto_Sans_SC`, the script automatically uses it for burn-in and sets the font family to `Noto Sans SC` when `--burn-font`/`--burn-fonts-dir` are not provided.
