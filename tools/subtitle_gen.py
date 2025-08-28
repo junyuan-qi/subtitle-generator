@@ -45,6 +45,15 @@ def _err(text: str) -> str:
     return _style(text, "31")  # red
 
 
+def _ordinal(n: int) -> str:
+    """Return 1 -> 1st, 2 -> 2nd, 3 -> 3rd, etc."""
+    if 10 <= (n % 100) <= 20:
+        suf = "th"
+    else:
+        suf = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suf}"
+
+
 def _require_openai_client():
     try:
         from openai import OpenAI  # type: ignore
@@ -554,8 +563,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"{_label('Burn-in:')} {'enabled' if args.burn_in else 'disabled'}")
     if args.burn_in:
         print(f"{_label('Output format:')} {args.burn_format}")
+    # List filenames to be processed
+    print(_label("Files:"))
+    for i, p in enumerate(videos, start=1):
+        print(f"  {i}. {os.path.basename(p)}")
+    print("")
 
-    for v in videos:
+    for i, v in enumerate(videos, start=1):
         base = os.path.splitext(os.path.basename(v))[0]
         safe_base = base
         # Replace path-unfriendly characters for outputs
@@ -571,7 +585,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"{safe_base}.{args.lang if args.burn_use=='translated' else 'orig'}.burned{burned_ext}"
         )
 
-        print(_label(f"File: {os.path.basename(v)}"))
+        print(_hdr(f"Start processing the {_ordinal(i)} file"))
+        print(_label(os.path.basename(v)))
         print("")
 
         # 1) Extract audio
