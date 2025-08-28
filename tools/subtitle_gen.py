@@ -4,7 +4,6 @@ import sys
 import json
 import subprocess
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import List, Optional, Dict, Any
 
 try:
@@ -19,7 +18,7 @@ def _require_openai_client():
     try:
         from openai import OpenAI  # type: ignore
         return OpenAI
-    except Exception as e:
+    except Exception:
         print("ERROR: openai SDK not installed. Add to requirements and install.")
         raise
 
@@ -47,10 +46,9 @@ class Segment:
 def hhmmss_millis(seconds: float) -> str:
     if seconds < 0:
         seconds = 0
-    millis = int(round((seconds - int(seconds)) * 1000))
-    td = timedelta(seconds=int(seconds))
-    # td does not include millis; format separately
-    total_seconds = int(td.total_seconds())
+    # Compute total milliseconds first to avoid 1000ms rounding edge cases
+    total_ms = int(round(seconds * 1000))
+    total_seconds, millis = divmod(total_ms, 1000)
     hours = total_seconds // 3600
     mins = (total_seconds % 3600) // 60
     secs = total_seconds % 60
@@ -69,7 +67,9 @@ def write_srt(segments: List[Segment], out_path: str) -> None:
         lines.append(f"{start} --> {end}")
         lines.append(text)
         lines.append("")
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    out_dir = os.path.dirname(out_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines).strip() + "\n")
 
@@ -113,6 +113,8 @@ def ensure_dirs(*dirs: str) -> None:
 
 def find_videos(src_dir: str) -> List[str]:
     paths: List[str] = []
+    if not os.path.isdir(src_dir):
+        return paths
     for entry in sorted(os.listdir(src_dir)):
         p = os.path.join(src_dir, entry)
         if not os.path.isfile(p):
@@ -144,6 +146,13 @@ def extract_audio_ffmpeg(video_path: str, audio_path: str, overwrite: bool = Fal
         raise
 
 
+def _ffmpeg_filter_quote(value: str) -> str:
+    """Quote a value for use inside an ffmpeg filter option.
+    Uses single quotes and escapes internal single quotes.
+    """
+    return "'" + str(value).replace("'", r"\'") + "'"
+
+
 def burn_subtitles_ffmpeg(
     video_path: str,
     srt_path: str,
@@ -156,7 +165,9 @@ def burn_subtitles_ffmpeg(
     """Burn subtitles into video using ffmpeg subtitles filter.
     Requires ffmpeg with libass support.
     """
-    ensure_dirs(os.path.dirname(out_path))
+    out_dir = os.path.dirname(out_path)
+    if out_dir:
+        ensure_dirs(out_dir)
 
     # Build subtitles filter with optional force_style for font and size
     style_parts = []
@@ -172,11 +183,11 @@ def burn_subtitles_ffmpeg(
 
     # Use UTF-8 char encoding for SRT
     # Construct filter argument
-    filt = f"subtitles={srt_path}:charenc=UTF-8"
+    filt = f"subtitles={_ffmpeg_filter_quote(srt_path)}:charenc=UTF-8"
     if fonts_dir:
-        filt += f":fontsdir={fonts_dir}"
+        filt += f":fontsdir={_ffmpeg_filter_quote(fonts_dir)}"
     if force_style:
-        filt += f":force_style='{force_style}'"
+        filt += f":force_style={_ffmpeg_filter_quote(force_style)}"
 
     cmd = [
         "ffmpeg",
@@ -230,7 +241,78 @@ def _ffprobe_duration_seconds(path: str) -> Optional[float]:
         return None
 
 
-def transcribe_openai_verbose_json(audio_path: str, model: str = "whisper-1", response_format: str = "verbose_json") -> List[Segment]:
+def _coerce_from_dict_methods(obj: Any) -> Optional[Dict[str, Any]]:
+    for attr in ("model_dump", "to_dict", "dict"):
+        method = getattr(obj, attr, None)
+        if callable(method):
+            try:
+                data = method()  # type: ignore[misc]
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                continue
+    return None
+
+
+def _coerce_from_json_methods(obj: Any) -> Optional[Dict[str, Any]]:
+    for attr in ("model_dump_json", "json"):
+        method = getattr(obj, attr, None)
+        if callable(method):
+            try:
+                raw = method()  # type: ignore[misc]
+                # json.loads expects str | bytes | bytearray; coerce otherwise
+                if not isinstance(raw, (str, bytes, bytearray)):
+                    raw = str(raw)
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                continue
+    return None
+
+
+def _coerce_from_str(obj: Any) -> Optional[Dict[str, Any]]:
+    try:
+        data = json.loads(str(obj))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _coerce_openai_data(transcript: Any) -> Dict[str, Any]:
+    """Best-effort conversion of OpenAI transcript object to a plain dict."""
+    if isinstance(transcript, dict):
+        return transcript  # type: ignore[return-value]
+
+    data = _coerce_from_dict_methods(transcript)
+    if data is not None:
+        return data
+
+    data = _coerce_from_json_methods(transcript)
+    if data is not None:
+        return data
+
+    data = _coerce_from_str(transcript)
+    if data is not None:
+        return data
+
+    # Last resort: wrap text field if present
+    return {"text": str(getattr(transcript, "text", ""))}
+
+
+def _extract_segments(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    maybe = data.get("segments")
+    return maybe if isinstance(maybe, list) else []
+
+
+def _extract_text(data: Dict[str, Any]) -> str:
+    val = data.get("text") if isinstance(data, dict) else None
+    if isinstance(val, str):
+        return val
+    return str(val) if val is not None else ""
+
+
+def transcribe_openai_verbose_json(audio_path: str, model: str = "whisper-1") -> List[Segment]:
     OpenAIClient = _require_openai_client()
     client = OpenAIClient()
     api_key = os.getenv("OPENAI_API_KEY")
@@ -254,54 +336,26 @@ def transcribe_openai_verbose_json(audio_path: str, model: str = "whisper-1", re
                 response_format="text",
             )
 
-    # Convert SDK object to a dict robustly across SDK versions
-    data: Dict[str, Any]
-    if isinstance(transcript, dict):
-        data = transcript
-    else:
-        # Try common methods
-        for attr in ("model_dump", "to_dict", "dict"):
-            method = getattr(transcript, attr, None)
-            if callable(method):
-                try:
-                    data = method()  # type: ignore
-                    break
-                except Exception:
-                    pass
-        else:
-            # Try JSON dump methods
-            for attr in ("model_dump_json", "json"):
-                method = getattr(transcript, attr, None)
-                if callable(method):
-                    try:
-                        data = json.loads(method())  # type: ignore
-                        break
-                    except Exception:
-                        pass
-            else:
-                # Best-effort string cast
-                try:
-                    data = json.loads(str(transcript))
-                except Exception:
-                    # Fall back to minimal dict
-                    data = {"text": getattr(transcript, "text", "")}
-    segments_data = data.get("segments") or []
+    # Convert SDK response to plain dict
+    data: Dict[str, Any] = _coerce_openai_data(transcript)
+    segments_data = _extract_segments(data)
     if model != "whisper-1":
         # Build a single segment spanning the audio duration
-        text = data.get("text") if isinstance(data.get("text"), str) else str(data)
+        text = _extract_text(data)
         dur = _ffprobe_duration_seconds(audio_path) or 0.0
         return [Segment(start=0.0, end=dur, text=text or "")]
-    if not segments_data and isinstance(data.get("text"), str):
+    if not segments_data:
         # Fallback: no segments from whisper; single full segment with duration
         dur = _ffprobe_duration_seconds(audio_path) or 0.0
-        return [Segment(start=0.0, end=dur, text=data["text"]) ]
+        return [Segment(start=0.0, end=dur, text=_extract_text(data))]
 
     segments: List[Segment] = []
     for s in segments_data:
-        start = float(s.get("start", 0.0))
-        end = float(s.get("end", start))
-        text = str(s.get("text", ""))
-        segments.append(Segment(start=start, end=end, text=text))
+        if isinstance(s, dict):
+            start = float(s.get("start", 0.0))
+            end = float(s.get("end", start))
+            text = str(s.get("text", ""))
+            segments.append(Segment(start=start, end=end, text=text))
     return segments
 
 
@@ -317,9 +371,9 @@ def _normalize_gemini_model_name(name: str) -> str:
 
 def translate_texts_gemini(texts: List[str], target_lang: str, model_name: str) -> List[str]:
     genai = _require_gemini()
-    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        raise RuntimeError("Missing GOOGLE_API_KEY (or GEMINI_API_KEY) in environment")
+        raise RuntimeError("Missing GEMINI_API_KEY or GOOGLE_API_KEY in environment")
 
     client = genai.Client(api_key=api_key)
     model_name = _normalize_gemini_model_name(model_name)
