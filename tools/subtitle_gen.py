@@ -165,6 +165,62 @@ def find_videos(src_dir: str) -> List[str]:
     return paths
 
 
+def download_with_yt_dlp(
+    urls: List[str],
+    dest_dir: str,
+    fmt: str,
+    output_tmpl: str,
+    overwrite: bool,
+    quiet: bool,
+) -> None:
+    """Download one or more URLs using yt-dlp into dest_dir.
+    Requires the `yt-dlp` CLI on PATH.
+    """
+    # Check yt-dlp availability
+    try:
+        subprocess.run(["yt-dlp", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception:
+        print(_err("yt-dlp not found. Install it (e.g., `pipx install yt-dlp` or `brew install yt-dlp`)."))
+        raise SystemExit(2)
+
+    ensure_dirs(dest_dir)
+    out_template = os.path.join(dest_dir, output_tmpl)
+    for url in urls:
+        print(_hdr("Downloading via yt-dlp"))
+        print(f"{_label('URL:')} {url}")
+        cmd = [
+            "yt-dlp",
+            "-f", fmt,
+            "-o", out_template,
+        ]
+        if not overwrite:
+            cmd.append("--no-overwrites")
+        if not quiet:
+            # Stream progress to console; --newline makes progress line-based
+            cmd.append("--newline")
+            cmd += [url]
+            try:
+                # Inherit stdout/stderr so progress displays live
+                subprocess.run(cmd, check=True)
+                print(_ok("Download completed."))
+            except subprocess.CalledProcessError as e:
+                # Error already printed by yt-dlp; still raise to stop the pipeline
+                raise
+        else:
+            # Quiet mode: capture output and only print summary
+            cmd += ["--quiet", url]
+            try:
+                proc = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                _ = proc.stdout  # ignored
+                err = proc.stderr.decode(errors="ignore").strip()
+                print(_ok("Downloaded (or skipped if exists)."))
+                if err and "ERROR" in err:
+                    print(_warn(err))
+            except subprocess.CalledProcessError as e:
+                sys.stderr.write(e.stderr.decode(errors="ignore"))
+                raise
+
+
 def extract_audio_ffmpeg(video_path: str, audio_path: str, overwrite: bool = False) -> None:
     if os.path.exists(audio_path) and not overwrite:
         # Caller prints section + skip; keep function quiet on skip.
@@ -446,6 +502,7 @@ def translate_texts_gemini(texts: List[str], target_lang: str, model_name: str) 
         "- Keep order and number of items exactly the same as input.\n"
         "- Do not add or remove items.\n"
         "- Do not include timestamps or numbers unless in the original text.\n"
+        "- Add spaces between Chinese and Roman characters.\n"
     )
 
     payload = {
@@ -539,6 +596,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--burn-margin-v", type=int, default=40, help="Vertical margin (bottom) for subtitles")
     parser.add_argument("--burn-fonts-dir", default=None, help="Directory with .ttf/.otf fonts to load (optional)")
     parser.add_argument("--burn-format", default="mp4", choices=["mp4", "webm"], help="Container for burned output (default: mp4)")
+    # yt-dlp download options
+    parser.add_argument("--yt", dest="yt_urls", action="append", default=None, help="URL to download with yt-dlp before processing (repeat to add multiple)")
+    parser.add_argument("--yt-format", dest="yt_format", default="bv*+ba/best", help="yt-dlp format selection (default: bv*+ba/best)")
+    parser.add_argument("--yt-output-tmpl", dest="yt_output_tmpl", default="%(title).200B.%(ext)s", help="yt-dlp filename template (default: %(title).200B.%(ext)s)")
+    parser.add_argument("--yt-quiet", dest="yt_quiet", action="store_true", help="Suppress yt-dlp progress output")
 
     args = parser.parse_args(argv)
 
@@ -550,6 +612,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     ensure_dirs(args.audio, args.subs, args.subs_lang)
+
+    # Optional: download videos first using yt-dlp
+    if args.yt_urls:
+        download_with_yt_dlp(
+            args.yt_urls,
+            dest_dir=args.src,
+            fmt=args.yt_format,
+            output_tmpl=args.yt_output_tmpl,
+            overwrite=args.overwrite,
+            quiet=args.yt_quiet,
+        )
 
     videos = find_videos(args.src)
     if not videos:

@@ -14,6 +14,7 @@ Features:
 
 - Python 3.9+
 - `ffmpeg` on PATH (`ffmpeg -version`)
+- Optional: `yt-dlp` on PATH if using `--yt` to download videos first
 - API keys as environment variables (auto-loaded from `.env`):
   - `OPENAI_API_KEY` for transcription
   - `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) for Gemini translation
@@ -57,6 +58,29 @@ uv run subtitle-gen \
 uv run main.py --src videos --lang zh
 
 Note: Running via `main.py` enables `--burn-in` automatically. Use the `subtitle-gen` CLI if you prefer not to burn-in by default, or pass the explicit CLI flags with `subtitle-gen`.
+```
+
+### Download with yt-dlp (optional)
+
+You can download videos from YouTube and many other sites using `yt-dlp` as part of the run, then process them automatically. Repeat `--yt` to add multiple URLs.
+
+```bash
+# Download to the `videos/` folder and process
+uv run subtitle-gen --yt "https://www.youtube.com/watch?v=VIDEO_ID" --lang zh
+
+# Using the main.py wrapper (burn-in enabled by default)
+uv run main.py --yt "https://youtu.be/VIDEO_ID" --lang zh
+
+# Customize yt-dlp format and output filename template
+uv run subtitle-gen \
+  --yt "https://youtu.be/VIDEO_ID" \
+  --yt-format "bv*+ba/best" \
+  --yt-output-tmpl "%(title).200B.%(ext)s" \
+  --lang zh
+
+# Show/hide yt-dlp progress
+# (Progress is shown by default. Add --yt-quiet to suppress.)
+uv run subtitle-gen --yt "https://youtu.be/VIDEO_ID" --yt-quiet --lang zh
 ```
 
 Outputs:
