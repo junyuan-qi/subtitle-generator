@@ -12,7 +12,7 @@ Features:
 
 ## Prerequisites
 
-- Python 3.9+
+- Python 3.13+
 - `ffmpeg` on PATH (`ffmpeg -version`)
 - Optional: `yt-dlp` on PATH if using `--yt` to download videos first
 - API keys as environment variables (auto-loaded from `.env`):
@@ -28,11 +28,11 @@ Using `uv` for environment and dependency management:
 uv sync   # creates .venv and installs deps from pyproject/uv.lock
 ```
 
-Alternatively with pip:
+Alternative (pip):
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install .
 ```
 
 ## Usage
@@ -56,9 +56,9 @@ uv run subtitle-gen \
 
 # or via main.py wrapper (enables burn-in by default)
 uv run main.py --src videos --lang zh
+```
 
 Note: Running via `main.py` enables `--burn-in` automatically. Use the `subtitle-gen` CLI if you prefer not to burn-in by default, or pass the explicit CLI flags with `subtitle-gen`.
-```
 
 ### Download with yt-dlp (optional)
 
@@ -89,7 +89,7 @@ Outputs:
 - `subs_zh/<video>.zh.srt` (translated)
  - `burned/<video>.<lang|orig>.burned.<mp4|webm>` (optional burned-in; default mp4)
 
-### Notes
+### ASR & Translation Notes
 
 - You can set `--asr-model gpt-4o-mini-transcribe` if available in your account.
 - For translation model, you can use any supported Gemini text model (e.g., `gemini-1.5-flash`).
@@ -131,10 +131,10 @@ Notes:
 - Output files go to `burned/` by default.
  - Burned output format is set via `--burn-format {mp4,webm}` (default: mp4). WebM uses VP9 video + Opus audio (requires ffmpeg with libvpx/libopus).
 
-Auto-defaults
+#### Auto-defaults
 - If a bundled font directory is present at `fonts/Noto_Sans_SC`, the script automatically uses it for burn-in and sets the font family to `Noto Sans SC` when `--burn-font`/`--burn-fonts-dir` are not provided.
 
-Quick usage with auto-detected font
+#### Quick usage with auto-detected font
 
 ```bash
 # If you placed Noto Sans SC under fonts/Noto_Sans_SC (or another supported fonts dir),
@@ -142,14 +142,13 @@ Quick usage with auto-detected font
 uv run subtitle-gen --src videos --lang zh --burn-in --burn-use translated --burn-out burned
 ```
 
-Tip (zsh): If you see `zsh: command not found: --burn-font`, you likely pasted a multi-line command without trailing backslashes. Either keep the backslashes or use the single-line example above.
-
 ## Troubleshooting
 
 - "ffmpeg not found": install ffmpeg via brew/choco/apt.
-- SDK import errors: ensure `pip install -r requirements.txt`.
+- SDK import errors: run `uv sync` (or `pip install .` in an activated venv).
 - Empty or off timestamps: make sure ASR model supports `verbose_json` with segments (default `whisper-1` does).
   - If using `gpt-4o-transcribe` models, timestamps are not provided by the API; the script will produce a single-segment SRT spanning the file duration.
+- Tip (zsh): If you see `zsh: command not found: --burn-font`, you likely pasted a multi-line command without trailing backslashes. Either keep the backslashes or use the single-line example shown.
 
 ## Code Structure
 

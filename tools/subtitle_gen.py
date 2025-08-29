@@ -521,7 +521,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     # yt-dlp download options
     parser.add_argument("--yt", dest="yt_urls", action="append", default=None, help="URL to download with yt-dlp before processing (repeat to add multiple)")
     parser.add_argument("--yt-format", dest="yt_format", default="bv*+ba/best", help="yt-dlp format selection (default: bv*+ba/best)")
-    parser.add_argument("--yt-output-tmpl", dest="yt_output_tmpl", default="%(title).200B.%(ext)s", help="yt-dlp filename template (default: %(title).200B.%(ext)s)")
+    # Note: avoid percent-format placeholders in help string to prevent argparse KeyError
+    parser.add_argument(
+        "--yt-output-tmpl",
+        dest="yt_output_tmpl",
+        default="%(title).200B.%(ext)s",
+        help="yt-dlp filename template (e.g., %%(title)s.%%(ext)s)",
+    )
     parser.add_argument("--yt-quiet", dest="yt_quiet", action="store_true", help="Suppress yt-dlp progress output")
 
     args = parser.parse_args(argv)
