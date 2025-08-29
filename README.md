@@ -150,3 +150,10 @@ Tip (zsh): If you see `zsh: command not found: --burn-font`, you likely pasted a
 - SDK import errors: ensure `pip install -r requirements.txt`.
 - Empty or off timestamps: make sure ASR model supports `verbose_json` with segments (default `whisper-1` does).
   - If using `gpt-4o-transcribe` models, timestamps are not provided by the API; the script will produce a single-segment SRT spanning the file duration.
+
+## Code Structure
+
+- `tools/subtitle_gen.py`: CLI entry and orchestration.
+- `tools/fs_utils.py`: filesystem helpers and video discovery.
+- `tools/ffmpeg_utils.py`: ffmpeg audio extraction, burn-in, and font probing.
+- `main.py`: wrapper enabling burn-in by default for quick runs.
