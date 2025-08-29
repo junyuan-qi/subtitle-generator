@@ -6,9 +6,14 @@ import subprocess
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
+# Allow running as a script without requiring project root on sys.path
+if __package__ is None or __package__ == "":  # pragma: no cover
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    __package__ = "tools"
+
 # New modular helpers
-from tools import fs_utils
-from tools.ffmpeg_utils import (
+from . import fs_utils
+from .ffmpeg_utils import (
     extract_audio_ffmpeg as _extract_audio_ffmpeg_impl,
     burn_subtitles_ffmpeg as _burn_subtitles_ffmpeg_impl,
     detect_default_font as _detect_default_font_impl,
