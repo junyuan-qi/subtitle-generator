@@ -6,6 +6,15 @@ import subprocess
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
+# New modular helpers
+from tools.fs_utils import ensure_dirs, find_videos
+from tools.ffmpeg_utils import (
+    extract_audio_ffmpeg as _extract_audio_ffmpeg_impl,
+    burn_subtitles_ffmpeg as _burn_subtitles_ffmpeg_impl,
+    detect_default_font as _detect_default_font_impl,
+    ffprobe_duration_seconds as _ffprobe_duration_seconds_impl,
+)
+
 try:
     from dotenv import load_dotenv  # type: ignore
     load_dotenv()  # auto-load .env from project root if present
@@ -146,23 +155,13 @@ def assemble_srt(blocks: List[Dict[str, Any]]) -> str:
     return "\n".join(out_lines).strip() + "\n"
 
 
-def ensure_dirs(*dirs: str) -> None:
-    for d in dirs:
-        os.makedirs(d, exist_ok=True)
+def ensure_dirs(*dirs: str) -> None:  # legacy wrapper
+    return None if not dirs else None  # no-op; imported from tools.fs_utils
 
 
-def find_videos(src_dir: str) -> List[str]:
-    paths: List[str] = []
-    if not os.path.isdir(src_dir):
-        return paths
-    for entry in sorted(os.listdir(src_dir)):
-        p = os.path.join(src_dir, entry)
-        if not os.path.isfile(p):
-            continue
-        ext = os.path.splitext(p)[1].lower()
-        if ext in SUPPORTED_VIDEO_EXTS:
-            paths.append(p)
-    return paths
+def find_videos(src_dir: str) -> List[str]:  # legacy wrapper
+    from tools.fs_utils import find_videos as _impl
+    return _impl(src_dir)
 
 
 def download_with_yt_dlp(
@@ -221,31 +220,8 @@ def download_with_yt_dlp(
                 raise
 
 
-def extract_audio_ffmpeg(video_path: str, audio_path: str, overwrite: bool = False) -> None:
-    if os.path.exists(audio_path) and not overwrite:
-        # Caller prints section + skip; keep function quiet on skip.
-        return
-    ensure_dirs(os.path.dirname(audio_path))
-    cmd = [
-        "ffmpeg", "-y" if overwrite else "-n",
-        "-i", video_path,
-        "-ac", "1",  # mono
-        "-ar", "16000",  # 16 kHz
-        "-vn",
-        audio_path,
-    ]
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as e:
-        sys.stderr.write(e.stderr.decode(errors="ignore"))
-        raise
-
-
-def _ffmpeg_filter_quote(value: str) -> str:
-    """Quote a value for use inside an ffmpeg filter option.
-    Uses single quotes and escapes internal single quotes.
-    """
-    return "'" + str(value).replace("'", r"\'") + "'"
+def extract_audio_ffmpeg(video_path: str, audio_path: str, overwrite: bool = False) -> None:  # legacy wrapper
+    return _extract_audio_ffmpeg_impl(video_path, audio_path, overwrite=overwrite)
 
 
 def burn_subtitles_ffmpeg(
@@ -257,93 +233,25 @@ def burn_subtitles_ffmpeg(
     margin_v: Optional[int] = None,
     fonts_dir: Optional[str] = None,
     show_progress: bool = False,
-) -> None:
-    """Burn subtitles into video using ffmpeg subtitles filter.
-    Requires ffmpeg with libass support.
-    """
-    out_dir = os.path.dirname(out_path)
-    if out_dir:
-        ensure_dirs(out_dir)
-
-    # Build subtitles filter with optional force_style for font and size
-    style_parts = []
-    if font:
-        style_parts.append(f"FontName={font}")
-    if font_size:
-        style_parts.append(f"FontSize={int(font_size)}")
-    if margin_v:
-        style_parts.append(f"MarginV={int(margin_v)}")
-    force_style = None
-    if style_parts:
-        force_style = ",".join(style_parts)
-
-    # Use UTF-8 char encoding for SRT
-    # Construct filter argument
-    filt = f"subtitles={_ffmpeg_filter_quote(srt_path)}:charenc=UTF-8"
-    if fonts_dir:
-        filt += f":fontsdir={_ffmpeg_filter_quote(fonts_dir)}"
-    if force_style:
-        filt += f":force_style={_ffmpeg_filter_quote(force_style)}"
-
-    # Choose codecs by output container
-    out_ext = os.path.splitext(out_path)[1].lower()
-    cmd = ["ffmpeg", "-y"]
-    if show_progress:
-        # Print periodic progress stats
-        cmd += ["-stats"]
-    cmd += ["-i", video_path, "-vf", filt]
-    if out_ext == ".webm":
-        # WebM requires VP8/VP9 video and Vorbis/Opus audio. Use VP9 + Opus.
-        cmd += ["-c:v", "libvpx-vp9", "-b:v", "2M", "-c:a", "libopus"]
-    else:
-        # Default to H.264 for mp4/mov, and copy audio to preserve quality.
-        cmd += ["-c:v", "libx264", "-c:a", "copy"]
-    cmd += [out_path]
-    try:
-        if show_progress:
-            # Inherit stdout/stderr so ffmpeg progress is visible
-            subprocess.run(cmd, check=True)
-        else:
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as e:
-        sys.stderr.write(e.stderr.decode(errors="ignore"))
-        raise
+) -> None:  # legacy wrapper
+    return _burn_subtitles_ffmpeg_impl(
+        video_path=video_path,
+        srt_path=srt_path,
+        out_path=out_path,
+        font=font,
+        font_size=font_size,
+        margin_v=margin_v,
+        fonts_dir=fonts_dir,
+        show_progress=show_progress,
+    )
 
 
-def _detect_default_font() -> Dict[str, Optional[str]]:
-    """Detect a bundled CJK font directory and family name.
-    Returns a dict with keys: fonts_dir, font_name (either may be None).
-    Preference order:
-    - fonts/Noto_Sans_SC (Noto Sans SC family)
-    - fonts (if it contains any NotoSansSC/Noto Sans SC TTF/OTF)
-    """
-    candidates = [
-        (os.path.join("fonts", "Noto_Sans_SC"), "Noto Sans SC"),
-        (os.path.join("fonts", "Noto Sans SC"), "Noto Sans SC"),
-        ("fonts", "Noto Sans SC"),
-    ]
-    for dir_path, family in candidates:
-        if os.path.isdir(dir_path):
-            # Check for any .ttf/.otf present (optional for first two)
-            try:
-                files = [f for f in os.listdir(dir_path) if f.lower().endswith((".ttf", ".otf"))]
-            except Exception:
-                files = []
-            if files or dir_path.endswith("Noto_Sans_SC") or dir_path.endswith("Noto Sans SC"):
-                return {"fonts_dir": dir_path, "font_name": family}
-    return {"fonts_dir": None, "font_name": None}
+def _detect_default_font() -> Dict[str, Optional[str]]:  # legacy wrapper
+    return _detect_default_font_impl()  # type: ignore[return-value]
 
 
-def _ffprobe_duration_seconds(path: str) -> Optional[float]:
-    try:
-        proc = subprocess.run([
-            "ffprobe", "-v", "error", "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", path,
-        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out = proc.stdout.decode().strip()
-        return float(out) if out else None
-    except Exception:
-        return None
+def _ffprobe_duration_seconds(path: str) -> Optional[float]:  # legacy wrapper
+    return _ffprobe_duration_seconds_impl(path)
 
 
 def _lang_display_name(code: str) -> str:
