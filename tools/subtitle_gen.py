@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
 # New modular helpers
-from tools.fs_utils import ensure_dirs, find_videos
+from tools import fs_utils
 from tools.ffmpeg_utils import (
     extract_audio_ffmpeg as _extract_audio_ffmpeg_impl,
     burn_subtitles_ffmpeg as _burn_subtitles_ffmpeg_impl,
@@ -156,12 +156,11 @@ def assemble_srt(blocks: List[Dict[str, Any]]) -> str:
 
 
 def ensure_dirs(*dirs: str) -> None:  # legacy wrapper
-    return None if not dirs else None  # no-op; imported from tools.fs_utils
+    fs_utils.ensure_dirs(*dirs)
 
 
 def find_videos(src_dir: str) -> List[str]:  # legacy wrapper
-    from tools.fs_utils import find_videos as _impl
-    return _impl(src_dir)
+    return fs_utils.find_videos(src_dir)
 
 
 def download_with_yt_dlp(
