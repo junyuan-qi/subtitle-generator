@@ -54,7 +54,7 @@ uv run subtitle-gen \
   --tx-model gemini-2.5-flash
 
 # or via main.py wrapper (enables burn-in by default)
-uv run python main.py --src videos --lang zh
+uv run main.py --src videos --lang zh
 
 Note: Running via `main.py` enables `--burn-in` automatically. Use the `subtitle-gen` CLI if you prefer not to burn-in by default, or pass the explicit CLI flags with `subtitle-gen`.
 ```
