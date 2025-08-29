@@ -106,6 +106,7 @@ uv run subtitle-gen \
   --src videos \
   --lang zh \
   --burn-in \
+  --burn-progress \
   --burn-use translated \
   --burn-out burned \
   --burn-font "PingFang SC" \
@@ -118,7 +119,7 @@ uv run subtitle-gen \
 Single-line equivalent:
 
 ```bash
-uv run subtitle-gen --src videos --lang zh --burn-in --burn-use translated --burn-out burned --burn-font "PingFang SC" --burn-font-size 28 --burn-margin-v 40 --burn-format mp4
+uv run subtitle-gen --src videos --lang zh --burn-in --burn-progress --burn-use translated --burn-out burned --burn-font "PingFang SC" --burn-font-size 28 --burn-margin-v 40 --burn-format mp4
 ```
 
 Notes:

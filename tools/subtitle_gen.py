@@ -256,6 +256,7 @@ def burn_subtitles_ffmpeg(
     font_size: Optional[int] = None,
     margin_v: Optional[int] = None,
     fonts_dir: Optional[str] = None,
+    show_progress: bool = False,
 ) -> None:
     """Burn subtitles into video using ffmpeg subtitles filter.
     Requires ffmpeg with libass support.
@@ -286,7 +287,11 @@ def burn_subtitles_ffmpeg(
 
     # Choose codecs by output container
     out_ext = os.path.splitext(out_path)[1].lower()
-    cmd = ["ffmpeg", "-y", "-i", video_path, "-vf", filt]
+    cmd = ["ffmpeg", "-y"]
+    if show_progress:
+        # Print periodic progress stats
+        cmd += ["-stats"]
+    cmd += ["-i", video_path, "-vf", filt]
     if out_ext == ".webm":
         # WebM requires VP8/VP9 video and Vorbis/Opus audio. Use VP9 + Opus.
         cmd += ["-c:v", "libvpx-vp9", "-b:v", "2M", "-c:a", "libopus"]
@@ -295,7 +300,11 @@ def burn_subtitles_ffmpeg(
         cmd += ["-c:v", "libx264", "-c:a", "copy"]
     cmd += [out_path]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if show_progress:
+            # Inherit stdout/stderr so ffmpeg progress is visible
+            subprocess.run(cmd, check=True)
+        else:
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as e:
         sys.stderr.write(e.stderr.decode(errors="ignore"))
         raise
@@ -596,6 +605,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--burn-margin-v", type=int, default=40, help="Vertical margin (bottom) for subtitles")
     parser.add_argument("--burn-fonts-dir", default=None, help="Directory with .ttf/.otf fonts to load (optional)")
     parser.add_argument("--burn-format", default="mp4", choices=["mp4", "webm"], help="Container for burned output (default: mp4)")
+    parser.add_argument("--burn-progress", action="store_true", help="Show ffmpeg progress while burning subtitles")
     # yt-dlp download options
     parser.add_argument("--yt", dest="yt_urls", action="append", default=None, help="URL to download with yt-dlp before processing (repeat to add multiple)")
     parser.add_argument("--yt-format", dest="yt_format", default="bv*+ba/best", help="yt-dlp format selection (default: bv*+ba/best)")
@@ -718,6 +728,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     font_size=args.burn_font_size,
                     margin_v=args.burn_margin_v,
                     fonts_dir=args.burn_fonts_dir,
+                    show_progress=args.burn_progress,
                 )
                 print(f"{_ok('Wrote:')} {burned_out_path}\n")
 
