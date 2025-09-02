@@ -9,6 +9,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "google-genai>=1.31.0",
     "socksio>=1.0.0",
+    "textual>=6.1.0",
 ]
 
 [project.scripts]
