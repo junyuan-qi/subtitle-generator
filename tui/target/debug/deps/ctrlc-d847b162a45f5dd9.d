@@ -1,0 +1,11 @@
+/Users/junyuan/Developer/subtitle-generator/tui/target/debug/deps/ctrlc-d847b162a45f5dd9.d: /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/lib.rs /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/error.rs /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/platform/mod.rs /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/platform/unix/mod.rs /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/signal.rs
+
+/Users/junyuan/Developer/subtitle-generator/tui/target/debug/deps/libctrlc-d847b162a45f5dd9.rlib: /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/lib.rs /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/error.rs /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/platform/mod.rs /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/platform/unix/mod.rs /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/signal.rs
+
+/Users/junyuan/Developer/subtitle-generator/tui/target/debug/deps/libctrlc-d847b162a45f5dd9.rmeta: /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/lib.rs /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/error.rs /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/platform/mod.rs /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/platform/unix/mod.rs /Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/signal.rs
+
+/Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/lib.rs:
+/Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/error.rs:
+/Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/platform/mod.rs:
+/Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/platform/unix/mod.rs:
+/Users/junyuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ctrlc-3.4.7/src/signal.rs:
