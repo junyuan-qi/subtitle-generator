@@ -24,3 +24,8 @@ packages = ["tools"]
 [build-system]
 requires = ["hatchling>=1.25.0"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12.11",
+]

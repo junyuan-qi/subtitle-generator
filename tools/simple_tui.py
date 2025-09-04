@@ -92,6 +92,34 @@ def read_key() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
+def _handle_navigation_key(key: str, idx: int, max_index: int) -> int | None:
+    """Handle navigation keys and return new index, or None for non-nav keys."""
+    if key in ("UP", "k"):
+        return (idx - 1) % (max_index + 1)
+    elif key in ("DOWN", "j"):
+        return (idx + 1) % (max_index + 1)
+    elif key in ("LEFT", "h"):
+        return max(0, idx - 1)
+    elif key in ("RIGHT", "l"):
+        return min(max_index, idx + 1)
+    return None
+
+
+def _render_menu(question: str, options: List[str], idx: int, hint: str) -> None:
+    """Render the menu options with current selection highlighted."""
+    sys.stdout.write("\x1b[H\x1b[J")  # move to 1,1 and clear to end of screen
+    q(question)
+    sys.stdout.write("\n\n")
+    for i, opt in enumerate(options):
+        if i == idx:
+            sys.stdout.write(f"{yellow('›')} {opt}\n")
+        else:
+            sys.stdout.write(f"  {opt}\n")
+    if hint:
+        sys.stdout.write("\n" + dim(hint))
+    sys.stdout.flush()
+
+
 def choose_keyed(
     question: str, options: List[str], idx: int = 0, hint: str = ""
 ) -> int:
@@ -100,40 +128,22 @@ def choose_keyed(
         return prompt_choice(question, options, default_index=idx)
 
     def enter_alt_screen() -> None:
-        # Switch to alternate buffer, clear, hide cursor
         sys.stdout.write("\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l")
         sys.stdout.flush()
 
     def exit_alt_screen() -> None:
-        # Restore cursor, return to main buffer
         sys.stdout.write("\x1b[?25h\x1b[?1049l")
         sys.stdout.flush()
 
     try:
         enter_alt_screen()
         while True:
-            # Repaint content at the top; clear the rest to avoid residual lines
-            sys.stdout.write("\x1b[H\x1b[J")  # move to 1,1 and clear to end of screen
-            q(question)
-            sys.stdout.write("\n\n")
-            for i, opt in enumerate(options):
-                if i == idx:
-                    sys.stdout.write(f"{yellow('›')} {opt}\n")
-                else:
-                    sys.stdout.write(f"  {opt}\n")
-            if hint:
-                sys.stdout.write("\n" + dim(hint))
-            sys.stdout.flush()
-
+            _render_menu(question, options, idx, hint)
             key = read_key()
-            if key in ("UP", "k"):
-                idx = (idx - 1) % len(options)
-            elif key in ("DOWN", "j"):
-                idx = (idx + 1) % len(options)
-            elif key in ("LEFT", "h"):
-                idx = max(0, idx - 1)
-            elif key in ("RIGHT", "l"):
-                idx = min(len(options) - 1, idx + 1)
+
+            new_idx = _handle_navigation_key(key, idx, len(options) - 1)
+            if new_idx is not None:
+                idx = new_idx
             elif key == "ENTER":
                 return idx
             elif key in ("ESC", "q"):
@@ -246,47 +256,45 @@ def build_command(
 # ---------- Runner ----------
 
 
-def run_and_stream(program: str, args: List[str], cwd: Optional[Path]) -> int:
-    # Prefer PTY on POSIX so the child believes it has a TTY (enables colors)
-    if os.name != "nt":
-        try:
-            return _run_with_pty(program, args, cwd)
-        except Exception:
-            # Fallback to piped mode if PTY fails
-            pass
-    print()
-    print("Running:")
-    print("$", program, *[sh_quote(a) for a in args])
-    print()
-
+def _setup_process_env() -> dict:
+    """Set up environment variables for subprocess."""
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
     env.setdefault("FORCE_COLOR", "1")
+    return env
 
+
+def _get_process_flags():
+    """Get platform-specific process creation flags."""
     preexec = os.setsid if hasattr(os, "setsid") else None
     creationflags = 0
     if os.name == "nt":
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    return preexec, creationflags
 
-    try:
-        proc = subprocess.Popen(
-            [program, *args],
-            cwd=str(cwd) if cwd else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=0,
-            env=env,
-            text=False,
-            universal_newlines=False,
-            preexec_fn=preexec,  # type: ignore[arg-type]
-            creationflags=creationflags,
-        )
-    except FileNotFoundError:
-        print(f"Error: failed to spawn '{program}'. Is it installed?")
-        return 127
 
+def _create_subprocess(program: str, args: List[str], cwd: Optional[Path]):
+    """Create and return a subprocess.Popen instance."""
+    env = _setup_process_env()
+    preexec, creationflags = _get_process_flags()
+
+    return subprocess.Popen(
+        [program, *args],
+        cwd=str(cwd) if cwd else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=0,
+        env=env,
+        text=False,
+        universal_newlines=False,
+        preexec_fn=preexec,  # type: ignore[arg-type]
+        creationflags=creationflags,
+    )
+
+
+def _setup_signal_handler(proc, suppress_traceback):
+    """Set up SIGINT handler for graceful process termination."""
     interrupted = {"count": 0}
-    suppress_traceback = {"on": False, "in_tb": False}
 
     def handle_sigint(_sig, _frm):
         interrupted["count"] += 1
@@ -308,59 +316,93 @@ def run_and_stream(program: str, args: List[str], cwd: Optional[Path]) -> int:
                 pass
 
     signal.signal(signal.SIGINT, handle_sigint)
+    return interrupted
 
-    assert proc.stdout is not None
-    # CR-aware streaming: replace last line on '\r'; append on '\n'
+
+def _process_traceback_line(line: str, suppress_traceback: dict) -> str:
+    """Filter out traceback lines if suppression is enabled."""
+    if not suppress_traceback["on"]:
+        return line
+
+    if line.startswith("Traceback (most recent call last):"):
+        suppress_traceback["in_tb"] = True
+        return ""
+    elif "KeyboardInterrupt" in line:
+        suppress_traceback["in_tb"] = False
+        return ""
+    elif suppress_traceback["in_tb"]:
+        return ""
+    return line
+
+
+def _stream_output(proc, suppress_traceback):
+    """Stream process output with CR-aware line handling."""
     last_len = 0
-    try:
-        while True:
-            chunk = proc.stdout.read(8192)
-            if not chunk:
-                break
-            text = chunk.decode(errors="replace")
-            acc = ""
-            for ch in text:
-                if ch == "\r":
-                    # erase current line and write updated content
-                    # Only echo if not suppressing traceback
-                    if not suppress_traceback["on"] or not suppress_traceback["in_tb"]:
-                        sys.stdout.write("\r" + acc)
-                        sys.stdout.flush()
-                    last_len = len(acc)
-                    acc = ""
-                elif ch == "\n":
-                    # finalize the line
-                    # clear any residual characters from previous longer line
-                    clear = " " * max(0, last_len - len(acc))
-                    line = acc
-                    # Optional traceback suppression after Ctrl+C
-                    if suppress_traceback["on"]:
-                        if line.startswith("Traceback (most recent call last):"):
-                            suppress_traceback["in_tb"] = True
-                            line = ""
-                        elif "KeyboardInterrupt" in line:
-                            suppress_traceback["in_tb"] = False
-                            line = ""
-                        elif suppress_traceback["in_tb"]:
-                            line = ""
-                    if line:
-                        sys.stdout.write("\r" + line + clear + "\n")
-                        sys.stdout.flush()
-                    last_len = 0
-                    acc = ""
-                else:
-                    acc += ch
-            if acc:
-                # show partial line in-place
-                clear = " " * max(0, last_len - len(acc))
+    acc = ""
+
+    while True:
+        chunk = proc.stdout.read(8192)
+        if not chunk:
+            break
+
+        text = chunk.decode(errors="replace")
+
+        for ch in text:
+            if ch == "\r":
                 if not suppress_traceback["on"] or not suppress_traceback["in_tb"]:
-                    sys.stdout.write("\r" + acc + clear)
+                    sys.stdout.write("\r" + acc)
                     sys.stdout.flush()
                 last_len = len(acc)
+                acc = ""
+            elif ch == "\n":
+                clear = " " * max(0, last_len - len(acc))
+                line = _process_traceback_line(acc, suppress_traceback)
+                if line:
+                    sys.stdout.write("\r" + line + clear + "\n")
+                    sys.stdout.flush()
+                last_len = 0
+                acc = ""
+            else:
+                acc += ch
+
+        if acc:
+            clear = " " * max(0, last_len - len(acc))
+            if not suppress_traceback["on"] or not suppress_traceback["in_tb"]:
+                sys.stdout.write("\r" + acc + clear)
+                sys.stdout.flush()
+            last_len = len(acc)
+
+
+def run_and_stream(program: str, args: List[str], cwd: Optional[Path]) -> int:
+    """Run a program and stream its output with CR-aware line handling."""
+    if os.name != "nt":
+        try:
+            return _run_with_pty(program, args, cwd)
+        except Exception:
+            pass
+
+    print()
+    print("Running:")
+    print("$", program, *[sh_quote(a) for a in args])
+    print()
+
+    try:
+        proc = _create_subprocess(program, args, cwd)
+    except FileNotFoundError:
+        print(f"Error: failed to spawn '{program}'. Is it installed?")
+        return 127
+
+    suppress_traceback = {"on": False, "in_tb": False}
+    _setup_signal_handler(proc, suppress_traceback)
+
+    assert proc.stdout is not None
+    try:
+        _stream_output(proc, suppress_traceback)
     finally:
         proc.wait()
         sys.stdout.write("\n[done] Exit code: %d\n" % proc.returncode)
         sys.stdout.flush()
+
     return int(proc.returncode or 0)
 
 
@@ -373,31 +415,28 @@ def _set_winsize(fd: int) -> None:
         pass
 
 
-def _run_with_pty(program: str, args: List[str], cwd: Optional[Path]) -> int:
-    print()
-    print("Running:")
-    print("$", program, *[sh_quote(a) for a in args])
-    print()
-
+def _setup_pty_env() -> dict:
+    """Set up environment variables for PTY subprocess."""
     env = os.environ.copy()
-    # Child should colorize because stdout is a TTY; still set helpful envs
     env.pop("NO_COLOR", None)
     env.setdefault("PYTHONUNBUFFERED", "1")
     env.setdefault("TERM", env.get("TERM", "xterm-256color"))
+    return env
 
-    pid, fd = pty.fork()
-    if pid == 0:
-        # child
+
+def _kill_process(pid: int, signal_type: int) -> None:
+    """Kill process with fallback from process group to individual process."""
+    try:
+        os.killpg(pid, signal_type)
+    except Exception:
         try:
-            if cwd:
-                os.chdir(str(cwd))
-            os.execvpe(program, [program, *args], env)
+            os.kill(pid, signal_type)
         except Exception:
-            os._exit(127)
+            pass
 
-    # parent
-    _set_winsize(fd)
 
+def _setup_pty_signal_handler(pid: int):
+    """Set up SIGINT handler for PTY process."""
     interrupted = {"count": 0}
 
     def handle_sigint(_sig, _frm):
@@ -405,50 +444,68 @@ def _run_with_pty(program: str, args: List[str], cwd: Optional[Path]) -> int:
         if interrupted["count"] == 1:
             sys.stderr.write("\n[ctrl-c] Stopping… (press again to force kill)\n")
             sys.stderr.flush()
-            try:
-                os.killpg(pid, signal.SIGTERM)  # graceful
-            except Exception:
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                except Exception:
-                    pass
+            _kill_process(pid, signal.SIGTERM)
         else:
-            try:
-                os.killpg(pid, signal.SIGKILL)
-            except Exception:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except Exception:
-                    pass
+            _kill_process(pid, signal.SIGKILL)
 
     old_handler = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, handle_sigint)
+    return old_handler
+
+
+def _stream_pty_output(fd: int, pid: int) -> int | None:
+    """Stream PTY output and check for process completion."""
+    r, _, _ = select.select([fd], [], [], 0.1)
+    if fd in r:
+        try:
+            data = os.read(fd, 8192)
+        except OSError:
+            data = b""
+        if not data:
+            return None
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+
     try:
-        # Stream bytes directly, preserving ANSI and carriage returns
+        pid_done, status = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pid_done = pid
+        status = 0
+
+    if pid_done == pid:
+        return os.WEXITSTATUS(status) if os.WIFEXITED(status) else 130
+    return None
+
+
+def _run_with_pty(program: str, args: List[str], cwd: Optional[Path]) -> int:
+    print()
+    print("Running:")
+    print("$", program, *[sh_quote(a) for a in args])
+    print()
+
+    env = _setup_pty_env()
+    pid, fd = pty.fork()
+
+    if pid == 0:
+        try:
+            if cwd:
+                os.chdir(str(cwd))
+            os.execvpe(program, [program, *args], env)
+        except Exception:
+            os._exit(127)
+
+    _set_winsize(fd)
+    old_handler = _setup_pty_signal_handler(pid)
+
+    try:
         while True:
-            r, _, _ = select.select([fd], [], [], 0.1)
-            if fd in r:
-                try:
-                    data = os.read(fd, 8192)
-                except OSError:
-                    data = b""
-                if not data:
-                    break
-                sys.stdout.buffer.write(data)
-                sys.stdout.buffer.flush()
-            # Check if child exited
-            try:
-                pid_done, status = os.waitpid(pid, os.WNOHANG)
-            except ChildProcessError:
-                pid_done = pid
-                status = 0
-            if pid_done == pid:
-                code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else 130
-                print(f"\n[done] Exit code: {code}")
-                return code
+            exit_code = _stream_pty_output(fd, pid)
+            if exit_code is not None:
+                print(f"\n[done] Exit code: {exit_code}")
+                return exit_code
     finally:
         signal.signal(signal.SIGINT, old_handler)
-    # If loop exits without waitpid catching, do a blocking wait
+
     _, status = os.waitpid(pid, 0)
     code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else 130
     print(f"\n[done] Exit code: {code}")

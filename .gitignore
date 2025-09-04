@@ -57,3 +57,10 @@ Cargo.lock
 # Generated files
 *.log
 run_generated.sh
+
+# Generated content - large media files
+videos/
+audio/
+subs/
+subs_*/
+burned/

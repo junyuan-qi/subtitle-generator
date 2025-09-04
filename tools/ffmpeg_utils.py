@@ -35,6 +35,47 @@ def _ffmpeg_filter_quote(value: str) -> str:
     return "'" + str(value).replace("'", r"\'") + "'"
 
 
+def _build_subtitle_style(
+    font: str | None, font_size: int | None, margin_v: int | None
+) -> str | None:
+    """Build the force_style parameter for subtitle rendering."""
+    style_parts = []
+    if font:
+        style_parts.append(f"FontName={font}")
+    if font_size:
+        style_parts.append(f"FontSize={int(font_size)}")
+    if margin_v:
+        style_parts.append(f"MarginV={int(margin_v)}")
+    return ",".join(style_parts) if style_parts else None
+
+
+def _build_subtitle_filter(srt_path: str, fonts_dir: str | None, force_style: str | None) -> str:
+    """Build the subtitle filter string for ffmpeg."""
+    filt = f"subtitles={_ffmpeg_filter_quote(srt_path)}:charenc=UTF-8"
+    if fonts_dir:
+        filt += f":fontsdir={_ffmpeg_filter_quote(fonts_dir)}"
+    if force_style:
+        filt += f":force_style={_ffmpeg_filter_quote(force_style)}"
+    return filt
+
+
+def _build_ffmpeg_command(
+    video_path: str, subtitle_filter: str, out_path: str, show_progress: bool
+) -> list[str]:
+    """Build the complete ffmpeg command."""
+    out_ext = os.path.splitext(out_path)[1].lower()
+    cmd = ["ffmpeg", "-y"]
+    if show_progress:
+        cmd += ["-stats"]
+    cmd += ["-i", video_path, "-vf", subtitle_filter]
+    if out_ext == ".webm":
+        cmd += ["-c:v", "libvpx-vp9", "-b:v", "2M", "-c:a", "libopus"]
+    else:
+        cmd += ["-c:v", "libx264", "-c:a", "copy"]
+    cmd += [out_path]
+    return cmd
+
+
 def burn_subtitles_ffmpeg(
     video_path: str,
     srt_path: str,
@@ -49,31 +90,10 @@ def burn_subtitles_ffmpeg(
     if out_dir:
         ensure_dirs(out_dir)
 
-    style_parts = []
-    if font:
-        style_parts.append(f"FontName={font}")
-    if font_size:
-        style_parts.append(f"FontSize={int(font_size)}")
-    if margin_v:
-        style_parts.append(f"MarginV={int(margin_v)}")
-    force_style = ",".join(style_parts) if style_parts else None
+    force_style = _build_subtitle_style(font, font_size, margin_v)
+    subtitle_filter = _build_subtitle_filter(srt_path, fonts_dir, force_style)
+    cmd = _build_ffmpeg_command(video_path, subtitle_filter, out_path, show_progress)
 
-    filt = f"subtitles={_ffmpeg_filter_quote(srt_path)}:charenc=UTF-8"
-    if fonts_dir:
-        filt += f":fontsdir={_ffmpeg_filter_quote(fonts_dir)}"
-    if force_style:
-        filt += f":force_style={_ffmpeg_filter_quote(force_style)}"
-
-    out_ext = os.path.splitext(out_path)[1].lower()
-    cmd = ["ffmpeg", "-y"]
-    if show_progress:
-        cmd += ["-stats"]
-    cmd += ["-i", video_path, "-vf", filt]
-    if out_ext == ".webm":
-        cmd += ["-c:v", "libvpx-vp9", "-b:v", "2M", "-c:a", "libopus"]
-    else:
-        cmd += ["-c:v", "libx264", "-c:a", "copy"]
-    cmd += [out_path]
     try:
         if show_progress:
             subprocess.run(cmd, check=True)
