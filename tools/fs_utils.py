@@ -22,4 +22,3 @@ def find_videos(src_dir: str) -> List[str]:
         if ext in SUPPORTED_VIDEO_EXTS:
             paths.append(p)
     return paths
-

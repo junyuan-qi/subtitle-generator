@@ -1,20 +1,26 @@
 import os
 import sys
 import subprocess
-from typing import Optional, Dict
+from typing import Dict
 
 from .fs_utils import ensure_dirs
 
 
-def extract_audio_ffmpeg(video_path: str, audio_path: str, overwrite: bool = False) -> None:
+def extract_audio_ffmpeg(
+    video_path: str, audio_path: str, overwrite: bool = False
+) -> None:
     if os.path.exists(audio_path) and not overwrite:
         return
     ensure_dirs(os.path.dirname(audio_path))
     cmd = [
-        "ffmpeg", "-y" if overwrite else "-n",
-        "-i", video_path,
-        "-ac", "1",
-        "-ar", "16000",
+        "ffmpeg",
+        "-y" if overwrite else "-n",
+        "-i",
+        video_path,
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
         "-vn",
         audio_path,
     ]
@@ -72,7 +78,9 @@ def burn_subtitles_ffmpeg(
         if show_progress:
             subprocess.run(cmd, check=True)
         else:
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(
+                cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
     except subprocess.CalledProcessError as e:
         sys.stderr.write(e.stderr.decode(errors="ignore"))
         raise
@@ -87,22 +95,40 @@ def detect_default_font() -> Dict[str, str | None]:
     for dir_path, family in candidates:
         if os.path.isdir(dir_path):
             try:
-                files = [f for f in os.listdir(dir_path) if f.lower().endswith((".ttf", ".otf"))]
+                files = [
+                    f
+                    for f in os.listdir(dir_path)
+                    if f.lower().endswith((".ttf", ".otf"))
+                ]
             except Exception:
                 files = []
-            if files or dir_path.endswith("Noto_Sans_SC") or dir_path.endswith("Noto Sans SC"):
+            if (
+                files
+                or dir_path.endswith("Noto_Sans_SC")
+                or dir_path.endswith("Noto Sans SC")
+            ):
                 return {"fonts_dir": dir_path, "font_name": family}
     return {"fonts_dir": None, "font_name": None}
 
 
 def ffprobe_duration_seconds(path: str) -> float | None:
     try:
-        proc = subprocess.run([
-            "ffprobe", "-v", "error", "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", path,
-        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
         out = proc.stdout.decode().strip()
         return float(out) if out else None
     except Exception:
         return None
-

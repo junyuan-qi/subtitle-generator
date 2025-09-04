@@ -40,6 +40,7 @@ LANG_OPTIONS: List[Tuple[str, str]] = [
 
 # ---------- Small IO helpers ----------
 
+
 def green(text: str) -> str:
     if sys.stdout.isatty():
         return f"\033[32m{text}\033[0m"
@@ -91,7 +92,9 @@ def read_key() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def choose_keyed(question: str, options: List[str], idx: int = 0, hint: str = "") -> int:
+def choose_keyed(
+    question: str, options: List[str], idx: int = 0, hint: str = ""
+) -> int:
     """Render a simple arrow-key selector in an alternate screen. Returns chosen index."""
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return prompt_choice(question, options, default_index=idx)
@@ -139,10 +142,14 @@ def choose_keyed(question: str, options: List[str], idx: int = 0, hint: str = ""
         exit_alt_screen()
 
 
-def prompt_choice(label: str, options: List[str], default_index: int | None = None) -> int:
+def prompt_choice(
+    label: str, options: List[str], default_index: int | None = None
+) -> int:
     q(label)
     for i, opt in enumerate(options, start=1):
-        mark = " (default)" if default_index is not None and i - 1 == default_index else ""
+        mark = (
+            " (default)" if default_index is not None and i - 1 == default_index else ""
+        )
         print(f"  {i}. {opt}{mark}")
     while True:
         raw = input(yellow("> ")).strip()
@@ -182,6 +189,7 @@ def prompt_text(label: str, default: str | None = None) -> str:
 
 
 # ---------- Command building ----------
+
 
 def find_pyproject_dir(start: Path) -> Optional[Path]:
     cur = start
@@ -236,6 +244,7 @@ def build_command(
 
 
 # ---------- Runner ----------
+
 
 def run_and_stream(program: str, args: List[str], cwd: Optional[Path]) -> int:
     # Prefer PTY on POSIX so the child believes it has a TTY (enables colors)
@@ -454,6 +463,7 @@ def sh_quote(s: str) -> str:
 
 # ---------- Main Wizard ----------
 
+
 def main() -> int:
     print(green("subtitle-tui"), "—", "interactive wizard (simple)")
 
@@ -464,14 +474,16 @@ def main() -> int:
         idx=0,
         hint="Use Up/Down to choose. Enter to continue. Ctrl+C to quit.",
     )
-    mode_local = (mode_idx == 0)
+    mode_local = mode_idx == 0
 
     # Q2 — Paths/URL
     if mode_local:
         src_path = prompt_text("Where are the videos located?", default="videos")
         yt_url = None
     else:
-        src_path = prompt_text("Where should downloaded videos be saved?", default="videos")
+        src_path = prompt_text(
+            "Where should downloaded videos be saved?", default="videos"
+        )
         yt_url = prompt_text("Paste a YouTube URL (single)", default="").strip() or None
 
     # Q3 — Language
@@ -487,7 +499,9 @@ def main() -> int:
     overwrite = prompt_yes_no("Overwrite existing results if found?", default=False)
 
     # Q5 — Burn-in
-    burn_in = prompt_yes_no("Do you want to burn subtitles into the video?", default=False)
+    burn_in = prompt_yes_no(
+        "Do you want to burn subtitles into the video?", default=False
+    )
 
     burn_use = None
     burn_format = None
@@ -507,7 +521,16 @@ def main() -> int:
         )
         burn_format = ["mp4", "webm"][burn_fmt_idx]
 
-    program, args, cwd = build_command(mode_local, src_path, yt_url, lang_code, overwrite, burn_in, burn_use, burn_format)
+    program, args, cwd = build_command(
+        mode_local,
+        src_path,
+        yt_url,
+        lang_code,
+        overwrite,
+        burn_in,
+        burn_use,
+        burn_format,
+    )
 
     print()
     print("Summary")

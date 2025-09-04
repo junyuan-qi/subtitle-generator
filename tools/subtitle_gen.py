@@ -22,6 +22,7 @@ from .ffmpeg_utils import (
 
 try:
     from dotenv import load_dotenv  # type: ignore
+
     load_dotenv()  # auto-load .env from project root if present
 except Exception:
     pass
@@ -71,6 +72,7 @@ def _ordinal(n: int) -> str:
 def _require_openai_client():
     try:
         from openai import OpenAI  # type: ignore
+
         return OpenAI
     except Exception:
         print("ERROR: openai SDK not installed. Add to requirements and install.")
@@ -80,6 +82,7 @@ def _require_openai_client():
 def _require_gemini():
     try:
         import importlib
+
         genai = importlib.import_module("google.genai")  # provided by google-genai SDK
         return genai
     except Exception:
@@ -134,17 +137,19 @@ def parse_srt(path: str) -> List[Dict[str, Any]]:
         content = f.read()
     blocks = []
     for block in content.strip().split("\n\n"):
-        lines = [l for l in block.splitlines() if l.strip() != ""]
+        lines = [line for line in block.splitlines() if line.strip() != ""]
         if len(lines) < 2:
             continue
         idx_line = lines[0].strip()
         timing_line = lines[1].strip()
         text_lines = lines[2:] if len(lines) > 2 else []
-        blocks.append({
-            "index": idx_line,
-            "timing": timing_line,
-            "text": "\n".join(text_lines).strip(),
-        })
+        blocks.append(
+            {
+                "index": idx_line,
+                "timing": timing_line,
+                "text": "\n".join(text_lines).strip(),
+            }
+        )
     return blocks
 
 
@@ -181,9 +186,18 @@ def download_with_yt_dlp(
     """
     # Check yt-dlp availability
     try:
-        subprocess.run(["yt-dlp", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(
+            ["yt-dlp", "--version"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
     except Exception:
-        print(_err("yt-dlp not found. Install it (e.g., `pipx install yt-dlp` or `brew install yt-dlp`)."))
+        print(
+            _err(
+                "yt-dlp not found. Install it (e.g., `pipx install yt-dlp` or `brew install yt-dlp`)."
+            )
+        )
         raise SystemExit(2)
 
     ensure_dirs(dest_dir)
@@ -193,8 +207,10 @@ def download_with_yt_dlp(
         print(f"{_label('URL:')} {url}")
         cmd = [
             "yt-dlp",
-            "-f", fmt,
-            "-o", out_template,
+            "-f",
+            fmt,
+            "-o",
+            out_template,
         ]
         if not overwrite:
             cmd.append("--no-overwrites")
@@ -206,14 +222,16 @@ def download_with_yt_dlp(
                 # Inherit stdout/stderr so progress displays live
                 subprocess.run(cmd, check=True)
                 print(_ok("Download completed."))
-            except subprocess.CalledProcessError as e:
+            except subprocess.CalledProcessError:
                 # Error already printed by yt-dlp; still raise to stop the pipeline
                 raise
         else:
             # Quiet mode: capture output and only print summary
             cmd += ["--quiet", url]
             try:
-                proc = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                proc = subprocess.run(
+                    cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
                 _ = proc.stdout  # ignored
                 err = proc.stderr.decode(errors="ignore").strip()
                 print(_ok("Downloaded (or skipped if exists)."))
@@ -224,7 +242,9 @@ def download_with_yt_dlp(
                 raise
 
 
-def extract_audio_ffmpeg(video_path: str, audio_path: str, overwrite: bool = False) -> None:  # legacy wrapper
+def extract_audio_ffmpeg(
+    video_path: str, audio_path: str, overwrite: bool = False
+) -> None:  # legacy wrapper
     return _extract_audio_ffmpeg_impl(video_path, audio_path, overwrite=overwrite)
 
 
@@ -348,7 +368,9 @@ def _extract_text(data: Dict[str, Any]) -> str:
     return str(val) if val is not None else ""
 
 
-def transcribe_openai_verbose_json(audio_path: str, model: str = "whisper-1") -> List[Segment]:
+def transcribe_openai_verbose_json(
+    audio_path: str, model: str = "whisper-1"
+) -> List[Segment]:
     OpenAIClient = _require_openai_client()
     client = OpenAIClient()
     api_key = os.getenv("OPENAI_API_KEY")
@@ -405,7 +427,9 @@ def _normalize_gemini_model_name(name: str) -> str:
     return alias_map.get(name, name)
 
 
-def translate_texts_gemini(texts: List[str], target_lang: str, model_name: str) -> List[str]:
+def translate_texts_gemini(
+    texts: List[str], target_lang: str, model_name: str
+) -> List[str]:
     genai = _require_gemini()
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -463,7 +487,7 @@ def translate_texts_gemini(texts: List[str], target_lang: str, model_name: str) 
     start = arr_text.find("[")
     end = arr_text.rfind("]")
     if start != -1 and end != -1 and end > start:
-        arr_text = arr_text[start:end + 1]
+        arr_text = arr_text[start : end + 1]
     try:
         data = json.loads(arr_text)
         if isinstance(data, list):
@@ -473,12 +497,16 @@ def translate_texts_gemini(texts: List[str], target_lang: str, model_name: str) 
     return texts
 
 
-def translate_srt_with_gemini(src_srt: str, out_srt: str, target_lang: str, model_name: str) -> None:
+def translate_srt_with_gemini(
+    src_srt: str, out_srt: str, target_lang: str, model_name: str
+) -> None:
     blocks = parse_srt(src_srt)
     if not blocks:
         raise RuntimeError(f"No SRT blocks found in {src_srt}")
     texts = [b.get("text", "") for b in blocks]
-    translated = translate_texts_gemini(texts, target_lang=target_lang, model_name=model_name)
+    translated = translate_texts_gemini(
+        texts, target_lang=target_lang, model_name=model_name
+    )
     if len(translated) != len(blocks):
         print("[warn] Translation count mismatch; keeping original texts for safety")
         translated = texts
@@ -491,36 +519,97 @@ def translate_srt_with_gemini(src_srt: str, out_srt: str, target_lang: str, mode
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Batch generate subtitles and translations from videos")
+    parser = argparse.ArgumentParser(
+        description="Batch generate subtitles and translations from videos"
+    )
     parser.add_argument("--src", default="videos", help="Source directory with videos")
     parser.add_argument("--audio", default="audio", help="Output directory for audio")
-    parser.add_argument("--subs", default="subs", help="Output directory for SRT subtitles")
-    parser.add_argument("--subs-lang", default="subs_zh", help="Output directory for translated SRT")
-    parser.add_argument("--lang", default="zh", help="Target language for translation (default: zh)")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing files")
+    parser.add_argument(
+        "--subs", default="subs", help="Output directory for SRT subtitles"
+    )
+    parser.add_argument(
+        "--subs-lang", default="subs_zh", help="Output directory for translated SRT"
+    )
+    parser.add_argument(
+        "--lang", default="zh", help="Target language for translation (default: zh)"
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing files"
+    )
     # ASR
-    parser.add_argument("--asr-provider", default="openai", choices=["openai"], help="ASR provider")
+    parser.add_argument(
+        "--asr-provider", default="openai", choices=["openai"], help="ASR provider"
+    )
     parser.add_argument(
         "--asr-model",
         default="whisper-1",
         help="OpenAI ASR model: whisper-1 (timestamps) or gpt-4o-transcribe/gpt-4o-mini-transcribe (text only)",
     )
     # Translation
-    parser.add_argument("--tx-provider", default="gemini", choices=["gemini"], help="Translation provider")
-    parser.add_argument("--tx-model", default="gemini-2.5-flash", help="Gemini model for translation")
+    parser.add_argument(
+        "--tx-provider",
+        default="gemini",
+        choices=["gemini"],
+        help="Translation provider",
+    )
+    parser.add_argument(
+        "--tx-model", default="gemini-2.5-flash", help="Gemini model for translation"
+    )
     # Burned-in subtitles
-    parser.add_argument("--burn-in", action="store_true", help="Burn subtitles back into the video")
-    parser.add_argument("--burn-use", default="translated", choices=["translated", "original"], help="Which SRT to burn: translated or original")
-    parser.add_argument("--burn-out", default="burned", help="Output directory for burned videos")
-    parser.add_argument("--burn-font", default=None, help="Font name to use when burning (optional)")
-    parser.add_argument("--burn-font-size", type=int, default=28, help="Font size for burned subtitles")
-    parser.add_argument("--burn-margin-v", type=int, default=40, help="Vertical margin (bottom) for subtitles")
-    parser.add_argument("--burn-fonts-dir", default=None, help="Directory with .ttf/.otf fonts to load (optional)")
-    parser.add_argument("--burn-format", default="mp4", choices=["mp4", "webm"], help="Container for burned output (default: mp4)")
-    parser.add_argument("--burn-progress", action="store_true", help="Show ffmpeg progress while burning subtitles")
+    parser.add_argument(
+        "--burn-in", action="store_true", help="Burn subtitles back into the video"
+    )
+    parser.add_argument(
+        "--burn-use",
+        default="translated",
+        choices=["translated", "original"],
+        help="Which SRT to burn: translated or original",
+    )
+    parser.add_argument(
+        "--burn-out", default="burned", help="Output directory for burned videos"
+    )
+    parser.add_argument(
+        "--burn-font", default=None, help="Font name to use when burning (optional)"
+    )
+    parser.add_argument(
+        "--burn-font-size", type=int, default=28, help="Font size for burned subtitles"
+    )
+    parser.add_argument(
+        "--burn-margin-v",
+        type=int,
+        default=40,
+        help="Vertical margin (bottom) for subtitles",
+    )
+    parser.add_argument(
+        "--burn-fonts-dir",
+        default=None,
+        help="Directory with .ttf/.otf fonts to load (optional)",
+    )
+    parser.add_argument(
+        "--burn-format",
+        default="mp4",
+        choices=["mp4", "webm"],
+        help="Container for burned output (default: mp4)",
+    )
+    parser.add_argument(
+        "--burn-progress",
+        action="store_true",
+        help="Show ffmpeg progress while burning subtitles",
+    )
     # yt-dlp download options
-    parser.add_argument("--yt", dest="yt_urls", action="append", default=None, help="URL to download with yt-dlp before processing (repeat to add multiple)")
-    parser.add_argument("--yt-format", dest="yt_format", default="bv*+ba/best", help="yt-dlp format selection (default: bv*+ba/best)")
+    parser.add_argument(
+        "--yt",
+        dest="yt_urls",
+        action="append",
+        default=None,
+        help="URL to download with yt-dlp before processing (repeat to add multiple)",
+    )
+    parser.add_argument(
+        "--yt-format",
+        dest="yt_format",
+        default="bv*+ba/best",
+        help="yt-dlp format selection (default: bv*+ba/best)",
+    )
     # Note: avoid percent-format placeholders in help string to prevent argparse KeyError
     parser.add_argument(
         "--yt-output-tmpl",
@@ -528,13 +617,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         default="%(title).200B.%(ext)s",
         help="yt-dlp filename template (e.g., %%(title)s.%%(ext)s)",
     )
-    parser.add_argument("--yt-quiet", dest="yt_quiet", action="store_true", help="Suppress yt-dlp progress output")
+    parser.add_argument(
+        "--yt-quiet",
+        dest="yt_quiet",
+        action="store_true",
+        help="Suppress yt-dlp progress output",
+    )
 
     args = parser.parse_args(argv)
 
     # Validate ffmpeg
     try:
-        subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(
+            ["ffmpeg", "-version"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
     except Exception:
         print("ERROR: ffmpeg not found. Please install ffmpeg and ensure it's on PATH.")
         return 2
@@ -574,16 +673,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         base = os.path.splitext(os.path.basename(v))[0]
         safe_base = base
         # Replace path-unfriendly characters for outputs
-        for ch in ['/', '\\', ':', '*', '?', '"', '<', '>', '|']:
-            safe_base = safe_base.replace(ch, '_')
+        for ch in ["/", "\\", ":", "*", "?", '"', "<", ">", "|"]:
+            safe_base = safe_base.replace(ch, "_")
 
         audio_path = os.path.join(args.audio, f"{safe_base}.wav")
         srt_path = os.path.join(args.subs, f"{safe_base}.srt")
-        translated_srt_path = os.path.join(args.subs_lang, f"{safe_base}.{args.lang}.srt")
+        translated_srt_path = os.path.join(
+            args.subs_lang, f"{safe_base}.{args.lang}.srt"
+        )
         burned_ext = ".mp4" if args.burn_format == "mp4" else ".webm"
         burned_out_path = os.path.join(
             args.burn_out,
-            f"{safe_base}.{args.lang if args.burn_use=='translated' else 'orig'}.burned{burned_ext}"
+            f"{safe_base}.{args.lang if args.burn_use=='translated' else 'orig'}.burned{burned_ext}",
         )
 
         print(_hdr(f"Start processing the {_ordinal(i)} file"))
@@ -612,7 +713,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         lang_name = _lang_display_name(args.lang)
         print(_hdr(f"Translating to {lang_name}"))
         if not os.path.exists(translated_srt_path) or args.overwrite:
-            translate_srt_with_gemini(srt_path, translated_srt_path, target_lang=args.lang, model_name=args.tx_model)
+            translate_srt_with_gemini(
+                srt_path,
+                translated_srt_path,
+                target_lang=args.lang,
+                model_name=args.tx_model,
+            )
             print(f"{_ok('Wrote:')} {translated_srt_path}\n")
         else:
             print(f"{_warn('Skip exists:')} {translated_srt_path}\n")
@@ -626,7 +732,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     args.burn_font = detected["font_name"]  # type: ignore
                 if not args.burn_fonts_dir and detected.get("fonts_dir"):
                     args.burn_fonts_dir = detected["fonts_dir"]  # type: ignore
-            srt_to_use = translated_srt_path if args.burn_use == "translated" else srt_path
+            srt_to_use = (
+                translated_srt_path if args.burn_use == "translated" else srt_path
+            )
             print(_hdr("Burning Subtitles"))
             # Skip if burned output already exists unless --overwrite is set
             if os.path.exists(burned_out_path) and not args.overwrite:

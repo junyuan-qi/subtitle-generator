@@ -244,11 +244,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
         }
 
         if event::poll(tick_rate)? {
-            match event::read()? {
-                Event::Key(key) => {
-                    handle_key(&mut app, key)?;
-                }
-                _ => {}
+            if let Event::Key(key) = event::read()? {
+                handle_key(&mut app, key)?;
             }
         }
     }
