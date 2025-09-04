@@ -3,6 +3,7 @@
 ## Project Structure & Module Organization
 - `main.py`: Thin wrapper that forwards to the CLI entry.
 - `tools/`: Core CLI logic in `subtitle_gen.py` and package entrypoint `subtitle-gen`.
+- `tui/`: Rust-based interactive TUI wizard using Ratatui (generates CLI commands).
 - `fonts/`: Optional bundled fonts for burn‑in (e.g., `fonts/Noto_Sans_SC`).
 - Generated at runtime: `audio/`, `subs/`, `subs_zh/`, `burned/`.
 - Config: `.env.example` documents required keys; `.env` is auto‑loaded.
@@ -12,8 +13,10 @@
 - `uv sync`: Create `.venv` and install deps from `pyproject.toml`/`uv.lock`.
 - `uv run subtitle-gen --src videos --lang zh`: Run CLI (preferred).
 - `uv run python main.py --src videos --lang zh`: Run via Python wrapper.
+- `cd tui && cargo run --release`: Interactive TUI wizard (generates and runs CLI command).
 - `uv build`: Build a wheel (Hatchling).
 - `ffmpeg -version`: Verify `ffmpeg` is on `PATH` before running.
+- `uv run ruff check`: Run linting checks (development dependency).
 
 ## CLI Help Snapshot
 - Usage: `subtitle-gen [options]` — view all flags with `uv run subtitle-gen --help`.

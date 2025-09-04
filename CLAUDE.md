@@ -27,6 +27,12 @@ ffmpeg -version           # Verify ffmpeg is available (required for audio extra
 uv run pytest -q         # Run tests (framework: pytest, location: tests/)
 ```
 
+**Linting:**
+```bash
+uv run ruff check         # Run linting checks (development dependency)
+uv run ruff format        # Apply code formatting
+```
+
 **Build:**
 ```bash
 uv build                 # Build wheel using Hatchling
@@ -49,6 +55,7 @@ uv build                 # Build wheel using Hatchling
 - `openai` - Speech-to-text transcription via Whisper models
 - `google-genai` - Translation via Gemini models  
 - `python-dotenv` - Environment variable loading from `.env`
+- `ruff` - Fast Python linter and formatter (development dependency)
 - External: `ffmpeg` (audio/video processing), `yt-dlp` (optional YouTube downloading)
 
 **Data Flow:**
