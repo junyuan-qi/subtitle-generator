@@ -9,23 +9,28 @@ This mirrors the Rust TUI flow, but uses plain stdin/stdout prompts.
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
 from pathlib import Path
 import termios
 import tty
-from typing import List, Optional, Tuple
-import shutil
+from typing import Callable, TypedDict
 
-if os.name != "nt":  # POSIX-only imports for PTY path
+try:  # POSIX-only imports for PTY path
+    import fcntl
     import pty
     import select
-    import fcntl
     import struct
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None  # type: ignore[assignment]
+    pty = None  # type: ignore[assignment]
+    select = None  # type: ignore[assignment]
+    struct = None  # type: ignore[assignment]
 
 
-LANG_OPTIONS: List[Tuple[str, str]] = [
+LANG_OPTIONS: list[tuple[str, str]] = [
     ("Chinese", "zh"),
     ("English", "en"),
     ("Japanese", "ja"),
@@ -105,7 +110,7 @@ def _handle_navigation_key(key: str, idx: int, max_index: int) -> int | None:
     return None
 
 
-def _render_menu(question: str, options: List[str], idx: int, hint: str) -> None:
+def _render_menu(question: str, options: list[str], idx: int, hint: str) -> None:
     """Render the menu options with current selection highlighted."""
     sys.stdout.write("\x1b[H\x1b[J")  # move to 1,1 and clear to end of screen
     q(question)
@@ -121,7 +126,7 @@ def _render_menu(question: str, options: List[str], idx: int, hint: str) -> None
 
 
 def choose_keyed(
-    question: str, options: List[str], idx: int = 0, hint: str = ""
+    question: str, options: list[str], idx: int = 0, hint: str = ""
 ) -> int:
     """Render a simple arrow-key selector in an alternate screen. Returns chosen index."""
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -153,7 +158,7 @@ def choose_keyed(
 
 
 def prompt_choice(
-    label: str, options: List[str], default_index: int | None = None
+    label: str, options: list[str], default_index: int | None = None
 ) -> int:
     q(label)
     for i, opt in enumerate(options, start=1):
@@ -201,7 +206,7 @@ def prompt_text(label: str, default: str | None = None) -> str:
 # ---------- Command building ----------
 
 
-def find_pyproject_dir(start: Path) -> Optional[Path]:
+def find_pyproject_dir(start: Path) -> Path | None:
     cur = start
     for _ in range(6):
         if (cur / "pyproject.toml").exists():
@@ -221,10 +226,10 @@ def build_command(
     burn_in: bool,
     burn_use: str | None,
     burn_format: str | None,
-) -> Tuple[str, List[str], Optional[Path]]:
+) -> tuple[str, list[str], Path | None]:
     repo = find_pyproject_dir(Path.cwd())
     program = "uv" if repo else "subtitle-gen"
-    args: List[str] = []
+    args: list[str] = []
     if repo:
         args += ["run", "subtitle-gen"]
 
@@ -256,7 +261,7 @@ def build_command(
 # ---------- Runner ----------
 
 
-def _setup_process_env() -> dict:
+def _setup_process_env() -> dict[str, str]:
     """Set up environment variables for subprocess."""
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -264,7 +269,7 @@ def _setup_process_env() -> dict:
     return env
 
 
-def _get_process_flags():
+def _get_process_flags() -> tuple[Callable[[], None] | None, int]:
     """Get platform-specific process creation flags."""
     preexec = os.setsid if hasattr(os, "setsid") else None
     creationflags = 0
@@ -273,7 +278,7 @@ def _get_process_flags():
     return preexec, creationflags
 
 
-def _create_subprocess(program: str, args: List[str], cwd: Optional[Path]):
+def _create_subprocess(program: str, args: list[str], cwd: Path | None) -> subprocess.Popen[bytes]:
     """Create and return a subprocess.Popen instance."""
     env = _setup_process_env()
     preexec, creationflags = _get_process_flags()
@@ -292,7 +297,12 @@ def _create_subprocess(program: str, args: List[str], cwd: Optional[Path]):
     )
 
 
-def _setup_signal_handler(proc, suppress_traceback):
+class TracebackState(TypedDict):
+    on: bool
+    in_tb: bool
+
+
+def _setup_signal_handler(proc: subprocess.Popen[bytes], suppress_traceback: TracebackState) -> dict[str, int]:
     """Set up SIGINT handler for graceful process termination."""
     interrupted = {"count": 0}
 
@@ -319,7 +329,7 @@ def _setup_signal_handler(proc, suppress_traceback):
     return interrupted
 
 
-def _process_traceback_line(line: str, suppress_traceback: dict) -> str:
+def _process_traceback_line(line: str, suppress_traceback: TracebackState) -> str:
     """Filter out traceback lines if suppression is enabled."""
     if not suppress_traceback["on"]:
         return line
@@ -335,13 +345,17 @@ def _process_traceback_line(line: str, suppress_traceback: dict) -> str:
     return line
 
 
-def _stream_output(proc, suppress_traceback):
+def _stream_output(proc: subprocess.Popen[bytes], suppress_traceback: TracebackState) -> None:
     """Stream process output with CR-aware line handling."""
     last_len = 0
     acc = ""
 
+    stdout = proc.stdout
+    if stdout is None:
+        return
+
     while True:
-        chunk = proc.stdout.read(8192)
+        chunk = stdout.read(8192)
         if not chunk:
             break
 
@@ -373,7 +387,7 @@ def _stream_output(proc, suppress_traceback):
             last_len = len(acc)
 
 
-def run_and_stream(program: str, args: List[str], cwd: Optional[Path]) -> int:
+def run_and_stream(program: str, args: list[str], cwd: Path | None) -> int:
     """Run a program and stream its output with CR-aware line handling."""
     if os.name != "nt":
         try:
@@ -392,7 +406,7 @@ def run_and_stream(program: str, args: List[str], cwd: Optional[Path]) -> int:
         print(f"Error: failed to spawn '{program}'. Is it installed?")
         return 127
 
-    suppress_traceback = {"on": False, "in_tb": False}
+    suppress_traceback: TracebackState = {"on": False, "in_tb": False}
     _setup_signal_handler(proc, suppress_traceback)
 
     assert proc.stdout is not None
@@ -407,6 +421,8 @@ def run_and_stream(program: str, args: List[str], cwd: Optional[Path]) -> int:
 
 
 def _set_winsize(fd: int) -> None:
+    if struct is None or fcntl is None:
+        return
     try:
         cols, rows = shutil.get_terminal_size(fallback=(80, 24))
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
@@ -415,7 +431,7 @@ def _set_winsize(fd: int) -> None:
         pass
 
 
-def _setup_pty_env() -> dict:
+def _setup_pty_env() -> dict[str, str]:
     """Set up environment variables for PTY subprocess."""
     env = os.environ.copy()
     env.pop("NO_COLOR", None)
@@ -455,6 +471,8 @@ def _setup_pty_signal_handler(pid: int):
 
 def _stream_pty_output(fd: int, pid: int) -> int | None:
     """Stream PTY output and check for process completion."""
+    if select is None:
+        raise RuntimeError("select module unavailable")
     r, _, _ = select.select([fd], [], [], 0.1)
     if fd in r:
         try:
@@ -477,7 +495,9 @@ def _stream_pty_output(fd: int, pid: int) -> int | None:
     return None
 
 
-def _run_with_pty(program: str, args: List[str], cwd: Optional[Path]) -> int:
+def _run_with_pty(program: str, args: list[str], cwd: Path | None) -> int:
+    if pty is None or select is None:
+        raise RuntimeError("PTY support requires a POSIX environment")
     print()
     print("Running:")
     print("$", program, *[sh_quote(a) for a in args])

@@ -5,7 +5,7 @@ import json
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 # Allow running as a script without requiring project root on sys.path
 if __package__ is None or __package__ == "":  # pragma: no cover
@@ -108,6 +108,25 @@ def _require_gemini():
 
 SUPPORTED_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm"}
 
+DEFAULT_GEMINI_TRANSLATION_BATCH_SIZE = 32
+
+
+def _coerce_to_int(value: Any) -> Optional[int]:
+    """Attempt to parse a loose JSON value into an int."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return int(stripped)
+        except ValueError:
+            return None
+    return None
+
 
 @dataclass
 class Segment:
@@ -152,7 +171,7 @@ def write_srt(segments: List[Segment], out_path: str) -> None:
         f.write("\n".join(lines).strip() + "\n")
 
 
-def parse_srt(path: str) -> List[Dict[str, Any]]:
+def parse_srt(path: str) -> List[dict[str, Any]]:
     # Minimal SRT parser to extract blocks
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
@@ -178,7 +197,7 @@ def parse_srt(path: str) -> List[Dict[str, Any]]:
     return blocks
 
 
-def assemble_srt(blocks: List[Dict[str, Any]]) -> str:
+def assemble_srt(blocks: List[dict[str, Any]]) -> str:
     out_lines: List[str] = []
 
     for i, b in enumerate(blocks, start=1):
@@ -305,7 +324,7 @@ def burn_subtitles_ffmpeg(
     )
 
 
-def _detect_default_font() -> Dict[str, Optional[str]]:  # legacy wrapper
+def _detect_default_font() -> dict[str, Optional[str]]:  # legacy wrapper
     return _detect_default_font_impl()  # type: ignore[return-value]
 
 
@@ -332,7 +351,7 @@ def _lang_display_name(code: str) -> str:
     return mapping.get(code.lower(), code)
 
 
-def _coerce_from_dict_methods(obj: Any) -> Optional[Dict[str, Any]]:
+def _coerce_from_dict_methods(obj: Any) -> Optional[dict[str, Any]]:
     for attr in ("model_dump", "to_dict", "dict"):
         method = getattr(obj, attr, None)
         if callable(method):
@@ -345,7 +364,7 @@ def _coerce_from_dict_methods(obj: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _coerce_from_json_methods(obj: Any) -> Optional[Dict[str, Any]]:
+def _coerce_from_json_methods(obj: Any) -> Optional[dict[str, Any]]:
     for attr in ("model_dump_json", "json"):
         method = getattr(obj, attr, None)
         if callable(method):
@@ -362,7 +381,7 @@ def _coerce_from_json_methods(obj: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _coerce_from_str(obj: Any) -> Optional[Dict[str, Any]]:
+def _coerce_from_str(obj: Any) -> Optional[dict[str, Any]]:
     try:
         data = json.loads(str(obj))
         return data if isinstance(data, dict) else None
@@ -370,7 +389,7 @@ def _coerce_from_str(obj: Any) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _coerce_openai_data(transcript: Any) -> Dict[str, Any]:
+def _coerce_openai_data(transcript: Any) -> dict[str, Any]:
     """Best-effort conversion of OpenAI transcript object to a plain dict."""
     if isinstance(transcript, dict):
         return transcript  # type: ignore[return-value]
@@ -391,12 +410,12 @@ def _coerce_openai_data(transcript: Any) -> Dict[str, Any]:
     return {"text": str(getattr(transcript, "text", ""))}
 
 
-def _extract_segments(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _extract_segments(data: dict[str, Any]) -> List[dict[str, Any]]:
     maybe = data.get("segments")
     return maybe if isinstance(maybe, list) else []
 
 
-def _extract_text(data: Dict[str, Any]) -> str:
+def _extract_text(data: dict[str, Any]) -> str:
     val = data.get("text") if isinstance(data, dict) else None
     if isinstance(val, str):
         return val
@@ -451,7 +470,7 @@ def transcribe_openai_verbose_json(
         raise RuntimeError("OpenAI transcription did not return a response")
 
     # Convert SDK response to plain dict
-    data: Dict[str, Any] = _coerce_openai_data(transcript)
+    data: dict[str, Any] = _coerce_openai_data(transcript)
     segments_data = _extract_segments(data)
 
     if model != "whisper-1":
@@ -487,8 +506,11 @@ def _normalize_gemini_model_name(name: str) -> str:
 
 
 def translate_texts_gemini(
-    texts: List[str], target_lang: str, model_name: str
+    texts: List[str], target_lang: str, model_name: str, batch_size: int = DEFAULT_GEMINI_TRANSLATION_BATCH_SIZE
 ) -> List[str]:
+    if not texts:
+        return []
+
     genai = _require_gemini()
 
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -498,25 +520,53 @@ def translate_texts_gemini(
     client = genai.Client(api_key=api_key)
     model_name = _normalize_gemini_model_name(model_name)
 
-    # Ask for strict JSON array of translated strings to preserve order
     system_instructions = (
         "You are a professional subtitle translator. Translate each input string into "
         f"{target_lang} while preserving meaning, brevity, and readability.\n"
         "Rules:\n"
-        "- Return ONLY a JSON array of strings, no commentary.\n"
-        "- Keep order and number of items exactly the same as input.\n"
-        "- Do not add or remove items.\n"
+        "- Use the provided id for each subtitle.\n"
+        "- Return ONLY JSON, no commentary.\n"
+        "- Output format: array of objects with keys 'id' and 'translation', or a JSON object mapping id to translation.\n"
+        "- Preserve id values exactly; do not renumber, add, or remove ids.\n"
         "- Do not include timestamps or numbers unless in the original text.\n"
         "- Add spaces between Chinese and Roman characters.\n"
     )
 
+    results: List[str] = list(texts)
+    batch_size = max(1, batch_size)
+
+    indexed_texts = list(enumerate(texts))
+
+    for start_idx in range(0, len(indexed_texts), batch_size):
+        batch = indexed_texts[start_idx : start_idx + batch_size]
+        translated_batch = _translate_text_batch_gemini(
+            client=client,
+            model_name=model_name,
+            batch=batch,
+            target_lang=target_lang,
+            system_instructions=system_instructions,
+        )
+
+        for idx, text in translated_batch.items():
+            if 0 <= idx < len(results):
+                results[idx] = text
+
+    return results
+
+
+def _translate_text_batch_gemini(
+    client: Any,
+    model_name: str,
+    batch: List[Tuple[int, str]],
+    target_lang: str,
+    system_instructions: str,
+) -> dict[int, str]:
     payload = {
         "task": "translate_subtitles",
         "target_language": target_lang,
-        "items": texts,
+        "items": [{"id": idx, "text": text} for idx, text in batch],
     }
 
-    # New SDK: call via client.models.generate_content
     try:
         resp = client.models.generate_content(
             model=model_name,
@@ -524,14 +574,13 @@ def translate_texts_gemini(
                 system_instructions,
                 "\nInput JSON:\n",
                 json.dumps(payload, ensure_ascii=False),
-                "\nRespond with only a JSON array of strings matching items length.\n",
+                "\nRespond with only JSON in the requested format.\n",
             ],
         )
     except Exception as e:
         print(f"[tx] Gemini error: {e}")
-        return texts
+        return {idx: text for idx, text in batch}
 
-    # Extract text robustly
     out_text = None
     for attr in ("text", "output_text"):
         if hasattr(resp, attr):
@@ -550,14 +599,38 @@ def translate_texts_gemini(
     if start != -1 and end != -1 and end > start:
         arr_text = arr_text[start : end + 1]
 
+    translations: dict[int, str] = {}
+
     try:
         data = json.loads(arr_text)
         if isinstance(data, list):
-            return [str(x) for x in data]
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                idx = _coerce_to_int(item.get("id"))
+                if idx is None:
+                    continue
+                value = item.get("translation")
+                if value is None:
+                    if "text" in item:
+                        value = item["text"]
+                    elif "value" in item:
+                        value = item["value"]
+                if value is not None:
+                    translations[idx] = str(value)
+        elif isinstance(data, dict):
+            for key, value in data.items():
+                idx = _coerce_to_int(key)
+                if idx is None:
+                    continue
+                translations[idx] = str(value)
     except Exception:
         pass
 
-    return texts
+    if translations:
+        return translations
+
+    return {idx: text for idx, text in batch}
 
 
 def translate_srt_with_gemini(
@@ -571,10 +644,6 @@ def translate_srt_with_gemini(
     translated = translate_texts_gemini(
         texts, target_lang=target_lang, model_name=model_name
     )
-
-    if len(translated) != len(blocks):
-        print("[warn] Translation count mismatch; keeping original texts for safety")
-        translated = texts
 
     for i, t in enumerate(translated):
         blocks[i]["text"] = t
@@ -656,7 +725,7 @@ def _print_processing_header(args, videos):
     print("")
 
 
-def _generate_file_paths(video_path: str, args):
+def _generate_file_paths(video_path: str, args) -> dict[str, str]:
     """Generate all file paths for a video."""
     base = os.path.splitext(os.path.basename(video_path))[0]
     safe_base = base
@@ -707,7 +776,7 @@ def _process_translation_step(srt_path: str, translated_srt_path: str, target_la
         print(f"{_warn('Skip exists:')} {translated_srt_path}\n")
 
 
-def _process_burn_step(video_path: str, file_paths: dict, args):
+def _process_burn_step(video_path: str, file_paths: dict[str, str], args):
     """Process the subtitle burning step."""
     detected = _detect_default_font()
     if not args.burn_font and detected.get("font_name"):
