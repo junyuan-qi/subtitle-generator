@@ -1,5 +1,4 @@
 import os
-from typing import List
 
 SUPPORTED_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm"}
 
@@ -10,8 +9,8 @@ def ensure_dirs(*dirs: str) -> None:
             os.makedirs(d, exist_ok=True)
 
 
-def find_videos(src_dir: str) -> List[str]:
-    paths: List[str] = []
+def find_videos(src_dir: str) -> list[str]:
+    paths: list[str] = []
     if not os.path.isdir(src_dir):
         return paths
     for entry in sorted(os.listdir(src_dir)):

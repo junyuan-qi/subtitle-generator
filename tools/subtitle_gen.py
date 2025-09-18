@@ -4,8 +4,9 @@ import sys
 import json
 import subprocess
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any, Tuple
+from typing import Protocol, TypedDict, cast
 
 # Allow running as a script without requiring project root on sys.path
 if __package__ is None or __package__ == "":  # pragma: no cover
@@ -111,7 +112,7 @@ SUPPORTED_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm"}
 DEFAULT_GEMINI_TRANSLATION_BATCH_SIZE = 32
 
 
-def _coerce_to_int(value: Any) -> Optional[int]:
+def _coerce_to_int(value: object) -> int | None:
     """Attempt to parse a loose JSON value into an int."""
     if isinstance(value, bool):
         return int(value)
@@ -128,11 +129,42 @@ def _coerce_to_int(value: Any) -> Optional[int]:
     return None
 
 
+def _coerce_to_float(value: object, default: float = 0.0) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return default
+        try:
+            return float(stripped)
+        except ValueError:
+            return default
+    return default
+
+
 @dataclass
 class Segment:
     start: float
     end: float
     text: str
+
+
+class SrtBlock(TypedDict):
+    index: str
+    timing: str
+    text: str
+
+
+JSONDict = dict[str, object]
+
+
+class _GeminiModels(Protocol):
+    def generate_content(self, *, model: str, contents: Sequence[object]) -> object: ...
+
+
+class GeminiClient(Protocol):
+    models: _GeminiModels
 
 
 def hhmmss_millis(seconds: float) -> str:
@@ -150,8 +182,8 @@ def hhmmss_millis(seconds: float) -> str:
     return f"{hours:02d}:{mins:02d}:{secs:02d},{millis:03d}"
 
 
-def write_srt(segments: List[Segment], out_path: str) -> None:
-    lines: List[str] = []
+def write_srt(segments: Sequence[Segment], out_path: str) -> None:
+    lines: list[str] = []
     for i, seg in enumerate(segments, start=1):
         start = hhmmss_millis(seg.start)
         end = hhmmss_millis(seg.end)
@@ -171,12 +203,12 @@ def write_srt(segments: List[Segment], out_path: str) -> None:
         f.write("\n".join(lines).strip() + "\n")
 
 
-def parse_srt(path: str) -> List[dict[str, Any]]:
+def parse_srt(path: str) -> list[SrtBlock]:
     # Minimal SRT parser to extract blocks
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    blocks = []
+    blocks: list[SrtBlock] = []
     for block in content.strip().split("\n\n"):
         lines = [line for line in block.splitlines() if line.strip() != ""]
         if len(lines) < 2:
@@ -187,18 +219,18 @@ def parse_srt(path: str) -> List[dict[str, Any]]:
         text_lines = lines[2:] if len(lines) > 2 else []
 
         blocks.append(
-            {
-                "index": idx_line,
-                "timing": timing_line,
-                "text": "\n".join(text_lines).strip(),
-            }
+            SrtBlock(
+                index=idx_line,
+                timing=timing_line,
+                text="\n".join(text_lines).strip(),
+            )
         )
 
     return blocks
 
 
-def assemble_srt(blocks: List[dict[str, Any]]) -> str:
-    out_lines: List[str] = []
+def assemble_srt(blocks: Sequence[SrtBlock]) -> str:
+    out_lines: list[str] = []
 
     for i, b in enumerate(blocks, start=1):
         index = str(i)
@@ -215,12 +247,12 @@ def ensure_dirs(*dirs: str) -> None:  # legacy wrapper
     fs_utils.ensure_dirs(*dirs)
 
 
-def find_videos(src_dir: str) -> List[str]:  # legacy wrapper
+def find_videos(src_dir: str) -> list[str]:  # legacy wrapper
     return fs_utils.find_videos(src_dir)
 
 
 def download_with_yt_dlp(
-    urls: List[str],
+    urls: Sequence[str],
     dest_dir: str,
     fmt: str,
     output_tmpl: str,
@@ -306,10 +338,10 @@ def burn_subtitles_ffmpeg(
     video_path: str,
     srt_path: str,
     out_path: str,
-    font: Optional[str] = None,
-    font_size: Optional[int] = None,
-    margin_v: Optional[int] = None,
-    fonts_dir: Optional[str] = None,
+    font: str | None = None,
+    font_size: int | None = None,
+    margin_v: int | None = None,
+    fonts_dir: str | None = None,
     show_progress: bool = False,
 ) -> None:  # legacy wrapper
     return _burn_subtitles_ffmpeg_impl(
@@ -324,11 +356,11 @@ def burn_subtitles_ffmpeg(
     )
 
 
-def _detect_default_font() -> dict[str, Optional[str]]:  # legacy wrapper
+def _detect_default_font() -> dict[str, str | None]:  # legacy wrapper
     return _detect_default_font_impl()  # type: ignore[return-value]
 
 
-def _ffprobe_duration_seconds(path: str) -> Optional[float]:  # legacy wrapper
+def _ffprobe_duration_seconds(path: str) -> float | None:  # legacy wrapper
     return _ffprobe_duration_seconds_impl(path)
 
 
@@ -351,20 +383,20 @@ def _lang_display_name(code: str) -> str:
     return mapping.get(code.lower(), code)
 
 
-def _coerce_from_dict_methods(obj: Any) -> Optional[dict[str, Any]]:
+def _coerce_from_dict_methods(obj: object) -> JSONDict | None:
     for attr in ("model_dump", "to_dict", "dict"):
         method = getattr(obj, attr, None)
         if callable(method):
             try:
                 data = method()  # type: ignore[misc]
                 if isinstance(data, dict):
-                    return data
+                    return dict(data)
             except Exception:
                 continue
     return None
 
 
-def _coerce_from_json_methods(obj: Any) -> Optional[dict[str, Any]]:
+def _coerce_from_json_methods(obj: object) -> JSONDict | None:
     for attr in ("model_dump_json", "json"):
         method = getattr(obj, attr, None)
         if callable(method):
@@ -375,24 +407,24 @@ def _coerce_from_json_methods(obj: Any) -> Optional[dict[str, Any]]:
                     raw = str(raw)
                 data = json.loads(raw)
                 if isinstance(data, dict):
-                    return data
+                    return dict(data)
             except Exception:
                 continue
     return None
 
 
-def _coerce_from_str(obj: Any) -> Optional[dict[str, Any]]:
+def _coerce_from_str(obj: object) -> JSONDict | None:
     try:
         data = json.loads(str(obj))
-        return data if isinstance(data, dict) else None
+        return dict(data) if isinstance(data, dict) else None
     except Exception:
         return None
 
 
-def _coerce_openai_data(transcript: Any) -> dict[str, Any]:
+def _coerce_openai_data(transcript: object) -> JSONDict:
     """Best-effort conversion of OpenAI transcript object to a plain dict."""
     if isinstance(transcript, dict):
-        return transcript  # type: ignore[return-value]
+        return dict(transcript)
 
     data = _coerce_from_dict_methods(transcript)
     if data is not None:
@@ -410,12 +442,19 @@ def _coerce_openai_data(transcript: Any) -> dict[str, Any]:
     return {"text": str(getattr(transcript, "text", ""))}
 
 
-def _extract_segments(data: dict[str, Any]) -> List[dict[str, Any]]:
+def _extract_segments(data: JSONDict) -> list[JSONDict]:
     maybe = data.get("segments")
-    return maybe if isinstance(maybe, list) else []
+    if not isinstance(maybe, list):
+        return []
+
+    segments: list[JSONDict] = []
+    for item in maybe:
+        if isinstance(item, dict):
+            segments.append(dict(item))
+    return segments
 
 
-def _extract_text(data: dict[str, Any]) -> str:
+def _extract_text(data: JSONDict) -> str:
     val = data.get("text") if isinstance(data, dict) else None
     if isinstance(val, str):
         return val
@@ -424,7 +463,7 @@ def _extract_text(data: dict[str, Any]) -> str:
 
 def transcribe_openai_verbose_json(
     audio_path: str, model: str = "whisper-1"
-) -> List[Segment]:
+) -> list[Segment]:
     OpenAIClient = _require_openai_client()
     client = OpenAIClient()
 
@@ -438,7 +477,7 @@ def transcribe_openai_verbose_json(
     except ValueError:
         max_attempts = 3
 
-    transcript: Any = None
+    transcript: object | None = None
     for attempt in range(1, max_attempts + 1):
         try:
             with open(audio_path, "rb") as f:
@@ -470,7 +509,7 @@ def transcribe_openai_verbose_json(
         raise RuntimeError("OpenAI transcription did not return a response")
 
     # Convert SDK response to plain dict
-    data: dict[str, Any] = _coerce_openai_data(transcript)
+    data: JSONDict = _coerce_openai_data(transcript)
     segments_data = _extract_segments(data)
 
     if model != "whisper-1":
@@ -484,13 +523,12 @@ def transcribe_openai_verbose_json(
         dur = _ffprobe_duration_seconds(audio_path) or 0.0
         return [Segment(start=0.0, end=dur, text=_extract_text(data))]
 
-    segments: List[Segment] = []
+    segments: list[Segment] = []
     for s in segments_data:
-        if isinstance(s, dict):
-            start = float(s.get("start", 0.0))
-            end = float(s.get("end", start))
-            text = str(s.get("text", ""))
-            segments.append(Segment(start=start, end=end, text=text))
+        start = _coerce_to_float(s.get("start"), 0.0)
+        end = _coerce_to_float(s.get("end"), start)
+        text = str(s.get("text", ""))
+        segments.append(Segment(start=start, end=end, text=text))
 
     return segments
 
@@ -506,8 +544,11 @@ def _normalize_gemini_model_name(name: str) -> str:
 
 
 def translate_texts_gemini(
-    texts: List[str], target_lang: str, model_name: str, batch_size: int = DEFAULT_GEMINI_TRANSLATION_BATCH_SIZE
-) -> List[str]:
+    texts: Sequence[str],
+    target_lang: str,
+    model_name: str,
+    batch_size: int = DEFAULT_GEMINI_TRANSLATION_BATCH_SIZE,
+) -> list[str]:
     if not texts:
         return []
 
@@ -517,7 +558,7 @@ def translate_texts_gemini(
     if not api_key:
         raise RuntimeError("Missing GEMINI_API_KEY or GOOGLE_API_KEY in environment")
 
-    client = genai.Client(api_key=api_key)
+    client = cast(GeminiClient, genai.Client(api_key=api_key))
     model_name = _normalize_gemini_model_name(model_name)
 
     system_instructions = (
@@ -532,7 +573,7 @@ def translate_texts_gemini(
         "- Add spaces between Chinese and Roman characters.\n"
     )
 
-    results: List[str] = list(texts)
+    results: list[str] = list(texts)
     batch_size = max(1, batch_size)
 
     indexed_texts = list(enumerate(texts))
@@ -555,9 +596,9 @@ def translate_texts_gemini(
 
 
 def _translate_text_batch_gemini(
-    client: Any,
+    client: GeminiClient,
     model_name: str,
-    batch: List[Tuple[int, str]],
+    batch: Sequence[tuple[int, str]],
     target_lang: str,
     system_instructions: str,
 ) -> dict[int, str]:
@@ -640,7 +681,7 @@ def translate_srt_with_gemini(
     if not blocks:
         raise RuntimeError(f"No SRT blocks found in {src_srt}")
 
-    texts = [b.get("text", "") for b in blocks]
+    texts = [block["text"] for block in blocks]
     translated = translate_texts_gemini(
         texts, target_lang=target_lang, model_name=model_name
     )
@@ -804,10 +845,11 @@ def _process_burn_step(video_path: str, file_paths: dict[str, str], args):
         print(f"{_ok('Wrote:')} {file_paths['burned_out_path']}\n")
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Main entry point for the subtitle generation tool."""
     parser = _create_argument_parser()
-    args = parser.parse_args(argv)
+    parsed_args = parser.parse_args(list(argv) if argv is not None else None)
+    args = parsed_args
 
     if not _validate_dependencies():
         return 2

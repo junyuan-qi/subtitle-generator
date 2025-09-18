@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from types import FrameType
 import termios
 import tty
 from typing import Callable, TypedDict
@@ -68,12 +69,20 @@ def q(text: str) -> None:
     print(f"{green('?')} {text}")
 
 
+def _stdout_write(text: str) -> None:
+    _ = sys.stdout.write(text)
+
+
+def _stderr_write(text: str) -> None:
+    _ = sys.stderr.write(text)
+
+
 def read_key() -> str:
     """Read a single key (supports arrows, Esc, Enter, Space)."""
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:
-        tty.setraw(fd)
+        _ = tty.setraw(fd)
         ch1 = sys.stdin.read(1)
         if ch1 == "\x1b":
             ch2 = sys.stdin.read(1)
@@ -112,17 +121,17 @@ def _handle_navigation_key(key: str, idx: int, max_index: int) -> int | None:
 
 def _render_menu(question: str, options: list[str], idx: int, hint: str) -> None:
     """Render the menu options with current selection highlighted."""
-    sys.stdout.write("\x1b[H\x1b[J")  # move to 1,1 and clear to end of screen
+    _stdout_write("\x1b[H\x1b[J")  # move to 1,1 and clear to end of screen
     q(question)
-    sys.stdout.write("\n\n")
+    _stdout_write("\n\n")
     for i, opt in enumerate(options):
         if i == idx:
-            sys.stdout.write(f"{yellow('›')} {opt}\n")
+            _stdout_write(f"{yellow('›')} {opt}\n")
         else:
-            sys.stdout.write(f"  {opt}\n")
+            _stdout_write(f"  {opt}\n")
     if hint:
-        sys.stdout.write("\n" + dim(hint))
-    sys.stdout.flush()
+        _stdout_write("\n" + dim(hint))
+    _ = sys.stdout.flush()
 
 
 def choose_keyed(
@@ -133,12 +142,12 @@ def choose_keyed(
         return prompt_choice(question, options, default_index=idx)
 
     def enter_alt_screen() -> None:
-        sys.stdout.write("\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l")
-        sys.stdout.flush()
+        _stdout_write("\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l")
+        _ = sys.stdout.flush()
 
     def exit_alt_screen() -> None:
-        sys.stdout.write("\x1b[?25h\x1b[?1049l")
-        sys.stdout.flush()
+        _stdout_write("\x1b[?25h\x1b[?1049l")
+        _ = sys.stdout.flush()
 
     try:
         enter_alt_screen()
@@ -264,8 +273,8 @@ def build_command(
 def _setup_process_env() -> dict[str, str]:
     """Set up environment variables for subprocess."""
     env = os.environ.copy()
-    env.setdefault("PYTHONUNBUFFERED", "1")
-    env.setdefault("FORCE_COLOR", "1")
+    _ = env.setdefault("PYTHONUNBUFFERED", "1")
+    _ = env.setdefault("FORCE_COLOR", "1")
     return env
 
 
@@ -304,13 +313,13 @@ class TracebackState(TypedDict):
 
 def _setup_signal_handler(proc: subprocess.Popen[bytes], suppress_traceback: TracebackState) -> dict[str, int]:
     """Set up SIGINT handler for graceful process termination."""
-    interrupted = {"count": 0}
+    interrupted: dict[str, int] = {"count": 0}
 
-    def handle_sigint(_sig, _frm):
+    def handle_sigint(_sig: int, _frm: FrameType | None) -> None:
         interrupted["count"] += 1
         if interrupted["count"] == 1:
-            sys.stderr.write("\n[ctrl-c] Stopping… (press again to force kill)\n")
-            sys.stderr.flush()
+            _stderr_write("\n[ctrl-c] Stopping… (press again to force kill)\n")
+            _ = sys.stderr.flush()
             suppress_traceback["on"] = True
             try:
                 if hasattr(os, "killpg"):
@@ -325,7 +334,7 @@ def _setup_signal_handler(proc: subprocess.Popen[bytes], suppress_traceback: Tra
             except Exception:
                 pass
 
-    signal.signal(signal.SIGINT, handle_sigint)
+    _ = signal.signal(signal.SIGINT, handle_sigint)
     return interrupted
 
 
@@ -364,16 +373,16 @@ def _stream_output(proc: subprocess.Popen[bytes], suppress_traceback: TracebackS
         for ch in text:
             if ch == "\r":
                 if not suppress_traceback["on"] or not suppress_traceback["in_tb"]:
-                    sys.stdout.write("\r" + acc)
-                    sys.stdout.flush()
+                    _stdout_write("\r" + acc)
+                _ = sys.stdout.flush()
                 last_len = len(acc)
                 acc = ""
             elif ch == "\n":
                 clear = " " * max(0, last_len - len(acc))
                 line = _process_traceback_line(acc, suppress_traceback)
                 if line:
-                    sys.stdout.write("\r" + line + clear + "\n")
-                    sys.stdout.flush()
+                    _stdout_write("\r" + line + clear + "\n")
+                    _ = sys.stdout.flush()
                 last_len = 0
                 acc = ""
             else:
@@ -382,8 +391,8 @@ def _stream_output(proc: subprocess.Popen[bytes], suppress_traceback: TracebackS
         if acc:
             clear = " " * max(0, last_len - len(acc))
             if not suppress_traceback["on"] or not suppress_traceback["in_tb"]:
-                sys.stdout.write("\r" + acc + clear)
-                sys.stdout.flush()
+                _stdout_write("\r" + acc + clear)
+                _ = sys.stdout.flush()
             last_len = len(acc)
 
 
@@ -407,15 +416,15 @@ def run_and_stream(program: str, args: list[str], cwd: Path | None) -> int:
         return 127
 
     suppress_traceback: TracebackState = {"on": False, "in_tb": False}
-    _setup_signal_handler(proc, suppress_traceback)
+    _ = _setup_signal_handler(proc, suppress_traceback)
 
     assert proc.stdout is not None
     try:
         _stream_output(proc, suppress_traceback)
     finally:
-        proc.wait()
-        sys.stdout.write("\n[done] Exit code: %d\n" % proc.returncode)
-        sys.stdout.flush()
+        _ = proc.wait()
+        _stdout_write("\n[done] Exit code: %d\n" % proc.returncode)
+        _ = sys.stdout.flush()
 
     return int(proc.returncode or 0)
 
@@ -426,7 +435,7 @@ def _set_winsize(fd: int) -> None:
     try:
         cols, rows = shutil.get_terminal_size(fallback=(80, 24))
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
-        fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+        _ = fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
     except Exception:
         pass
 
@@ -434,9 +443,9 @@ def _set_winsize(fd: int) -> None:
 def _setup_pty_env() -> dict[str, str]:
     """Set up environment variables for PTY subprocess."""
     env = os.environ.copy()
-    env.pop("NO_COLOR", None)
-    env.setdefault("PYTHONUNBUFFERED", "1")
-    env.setdefault("TERM", env.get("TERM", "xterm-256color"))
+    _ = env.pop("NO_COLOR", None)
+    _ = env.setdefault("PYTHONUNBUFFERED", "1")
+    _ = env.setdefault("TERM", env.get("TERM", "xterm-256color"))
     return env
 
 
@@ -455,17 +464,17 @@ def _setup_pty_signal_handler(pid: int):
     """Set up SIGINT handler for PTY process."""
     interrupted = {"count": 0}
 
-    def handle_sigint(_sig, _frm):
+    def handle_sigint(_sig: int, _frm: FrameType | None) -> None:
         interrupted["count"] += 1
         if interrupted["count"] == 1:
-            sys.stderr.write("\n[ctrl-c] Stopping… (press again to force kill)\n")
-            sys.stderr.flush()
+            _stderr_write("\n[ctrl-c] Stopping… (press again to force kill)\n")
+            _ = sys.stderr.flush()
             _kill_process(pid, signal.SIGTERM)
         else:
             _kill_process(pid, signal.SIGKILL)
 
     old_handler = signal.getsignal(signal.SIGINT)
-    signal.signal(signal.SIGINT, handle_sigint)
+    _ = signal.signal(signal.SIGINT, handle_sigint)
     return old_handler
 
 
@@ -481,8 +490,8 @@ def _stream_pty_output(fd: int, pid: int) -> int | None:
             data = b""
         if not data:
             return None
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
+        _ = sys.stdout.buffer.write(data)
+        _ = sys.stdout.buffer.flush()
 
     try:
         pid_done, status = os.waitpid(pid, os.WNOHANG)
@@ -524,12 +533,7 @@ def _run_with_pty(program: str, args: list[str], cwd: Path | None) -> int:
                 print(f"\n[done] Exit code: {exit_code}")
                 return exit_code
     finally:
-        signal.signal(signal.SIGINT, old_handler)
-
-    _, status = os.waitpid(pid, 0)
-    code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else 130
-    print(f"\n[done] Exit code: {code}")
-    return code
+        _ = signal.signal(signal.SIGINT, old_handler)
 
 
 def sh_quote(s: str) -> str:

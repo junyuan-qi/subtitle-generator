@@ -1,7 +1,6 @@
 import os
 import sys
 import subprocess
-from typing import Dict
 
 from .fs_utils import ensure_dirs
 
@@ -22,7 +21,7 @@ def extract_audio_ffmpeg(
         codec_args = ["-c:a", "libopus", "-b:a", "96k"]
     else:
         codec_args = ["-c:a", "pcm_s16le"]
-    cmd = [
+    cmd: list[str] = [
         "ffmpeg",
         "-y" if overwrite else "-n",
         "-i",
@@ -36,9 +35,11 @@ def extract_audio_ffmpeg(
         audio_path,
     ]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        _ = subprocess.run(
+            cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
     except subprocess.CalledProcessError as e:
-        sys.stderr.write(e.stderr.decode(errors="ignore"))
+        _handle_ffmpeg_error(e)
         raise
 
 
@@ -50,7 +51,7 @@ def _build_subtitle_style(
     font: str | None, font_size: int | None, margin_v: int | None
 ) -> str | None:
     """Build the force_style parameter for subtitle rendering."""
-    style_parts = []
+    style_parts: list[str] = []
     if font:
         style_parts.append(f"FontName={font}")
     if font_size:
@@ -107,18 +108,18 @@ def burn_subtitles_ffmpeg(
 
     try:
         if show_progress:
-            subprocess.run(cmd, check=True)
+            _ = subprocess.run(cmd, check=True)
         else:
-            subprocess.run(
+            _ = subprocess.run(
                 cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
     except subprocess.CalledProcessError as e:
-        sys.stderr.write(e.stderr.decode(errors="ignore"))
+        _handle_ffmpeg_error(e)
         raise
 
 
-def detect_default_font() -> Dict[str, str | None]:
-    candidates = [
+def detect_default_font() -> dict[str, str | None]:
+    candidates: list[tuple[str, str]] = [
         (os.path.join("fonts", "Noto_Sans_SC"), "Noto Sans SC"),
         (os.path.join("fonts", "Noto Sans SC"), "Noto Sans SC"),
         ("fonts", "Noto Sans SC"),
@@ -126,7 +127,7 @@ def detect_default_font() -> Dict[str, str | None]:
     for dir_path, family in candidates:
         if os.path.isdir(dir_path):
             try:
-                files = [
+                files: list[str] = [
                     f
                     for f in os.listdir(dir_path)
                     if f.lower().endswith((".ttf", ".otf"))
@@ -163,3 +164,15 @@ def ffprobe_duration_seconds(path: str) -> float | None:
         return float(out) if out else None
     except Exception:
         return None
+
+
+def _handle_ffmpeg_error(error: subprocess.CalledProcessError) -> None:
+    stderr_raw: object | None = getattr(error, "stderr", None)
+    stderr_bytes: bytes | None = None
+    if isinstance(stderr_raw, (bytes, bytearray)):
+        stderr_bytes = bytes(stderr_raw)
+
+    if stderr_bytes is not None:
+        _ = sys.stderr.write(stderr_bytes.decode(errors="ignore"))
+    else:
+        _ = sys.stderr.write(str(error))
