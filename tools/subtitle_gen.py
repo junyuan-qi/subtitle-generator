@@ -4,7 +4,7 @@ import sys
 import json
 import subprocess
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, TypedDict, cast
 
@@ -24,7 +24,7 @@ from .ffmpeg_utils import (
 
 try:
     from dotenv import load_dotenv  # type: ignore
-    load_dotenv()  # auto-load .env from project root if present
+    _ = load_dotenv()  # auto-load .env from project root if present
 except Exception:
     pass
 
@@ -141,6 +141,17 @@ def _coerce_to_float(value: object, default: float = 0.0) -> float:
         except ValueError:
             return default
     return default
+
+
+def _write_subprocess_error(error: subprocess.CalledProcessError) -> None:
+    stderr_raw = getattr(error, "stderr", None)
+    if isinstance(stderr_raw, (bytes, bytearray)):
+        text = bytes(stderr_raw).decode(errors="ignore")
+    elif stderr_raw is None:
+        text = str(error)
+    else:
+        text = str(stderr_raw)
+    _ = sys.stderr.write(text)
 
 
 @dataclass
@@ -265,7 +276,7 @@ def download_with_yt_dlp(
     """
     # Check yt-dlp availability
     try:
-        subprocess.run(
+        _ = subprocess.run(
             ["yt-dlp", "--version"],
             check=True,
             stdout=subprocess.PIPE,
@@ -304,7 +315,7 @@ def download_with_yt_dlp(
 
             try:
                 # Inherit stdout/stderr so progress displays live
-                subprocess.run(cmd, check=True)
+                _ = subprocess.run(cmd, check=True)
                 print(_ok("Download completed."))
             except subprocess.CalledProcessError:
                 # Error already printed by yt-dlp; still raise to stop the pipeline
@@ -318,13 +329,13 @@ def download_with_yt_dlp(
                 proc = subprocess.run(
                     cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
                 )
-                _ = proc.stdout  # ignored
-                err = proc.stderr.decode(errors="ignore").strip()
+                err_bytes = bytes(proc.stderr) if isinstance(proc.stderr, (bytes, bytearray)) else b""
+                err = err_bytes.decode(errors="ignore").strip()
                 print(_ok("Downloaded (or skipped if exists)."))
                 if err and "ERROR" in err:
                     print(_warn(err))
             except subprocess.CalledProcessError as e:
-                sys.stderr.write(e.stderr.decode(errors="ignore"))
+                _write_subprocess_error(e)
                 raise
 
 
@@ -390,7 +401,7 @@ def _coerce_from_dict_methods(obj: object) -> JSONDict | None:
             try:
                 data = method()  # type: ignore[misc]
                 if isinstance(data, dict):
-                    return dict(data)
+                    return {str(k): v for k, v in data.items()}
             except Exception:
                 continue
     return None
@@ -407,7 +418,7 @@ def _coerce_from_json_methods(obj: object) -> JSONDict | None:
                     raw = str(raw)
                 data = json.loads(raw)
                 if isinstance(data, dict):
-                    return dict(data)
+                    return {str(k): v for k, v in data.items()}
             except Exception:
                 continue
     return None
@@ -416,7 +427,7 @@ def _coerce_from_json_methods(obj: object) -> JSONDict | None:
 def _coerce_from_str(obj: object) -> JSONDict | None:
     try:
         data = json.loads(str(obj))
-        return dict(data) if isinstance(data, dict) else None
+        return {str(k): v for k, v in data.items()} if isinstance(data, dict) else None
     except Exception:
         return None
 
