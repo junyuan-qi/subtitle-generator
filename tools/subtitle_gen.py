@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
@@ -75,6 +76,24 @@ def _require_openai_client():
     except Exception:
         print("ERROR: openai SDK not installed. Add to requirements and install.")
         raise
+
+
+def _is_retryable_openai_error(err: Exception) -> bool:
+    should_retry = getattr(err, "should_retry", None)
+    if isinstance(should_retry, bool):
+        return should_retry
+
+    try:
+        from openai import (  # type: ignore
+            APIConnectionError,
+            APITimeoutError,
+            InternalServerError,
+            RateLimitError,
+        )
+    except Exception:
+        return False
+
+    return isinstance(err, (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError))
 
 
 def _require_gemini():
@@ -394,22 +413,42 @@ def transcribe_openai_verbose_json(
     if not api_key:
         raise RuntimeError("Missing OPENAI_API_KEY in environment")
 
-    if model == "whisper-1":
-        with open(audio_path, "rb") as f:
-            transcript = client.audio.transcriptions.create(
-                model=model,
-                file=f,
-                response_format="verbose_json",
-                timestamp_granularities=["segment"],
-            )
-    else:
-        # gpt-4o(-mini)-transcribe support only text/json; no segments
-        with open(audio_path, "rb") as f:
-            transcript = client.audio.transcriptions.create(
-                model=model,
-                file=f,
-                response_format="text",
-            )
+    raw_max_attempts = os.getenv("OPENAI_TRANSCRIBE_MAX_RETRIES", os.getenv("OPENAI_MAX_RETRIES", "3"))
+    try:
+        max_attempts = max(1, int(raw_max_attempts))
+    except ValueError:
+        max_attempts = 3
+
+    transcript: Any = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with open(audio_path, "rb") as f:
+                if model == "whisper-1":
+                    transcript = client.audio.transcriptions.create(
+                        model=model,
+                        file=f,
+                        response_format="verbose_json",
+                        timestamp_granularities=["segment"],
+                    )
+                else:
+                    # gpt-4o(-mini)-transcribe support only text/json; no segments
+                    transcript = client.audio.transcriptions.create(
+                        model=model,
+                        file=f,
+                        response_format="text",
+                    )
+            break
+        except Exception as err:
+            if attempt >= max_attempts or not _is_retryable_openai_error(err):
+                raise
+
+            delay = min(30.0, 2.0 * (2 ** (attempt - 1)))
+            detail = str(err).strip() or err.__class__.__name__
+            print(_warn(f"OpenAI request failed ({detail}). Retrying in {delay:.1f}s... [{attempt}/{max_attempts}]"))
+            time.sleep(delay)
+
+    if transcript is None:
+        raise RuntimeError("OpenAI transcription did not return a response")
 
     # Convert SDK response to plain dict
     data: Dict[str, Any] = _coerce_openai_data(transcript)
@@ -628,7 +667,7 @@ def _generate_file_paths(video_path: str, args):
     lang_suffix = args.lang if args.burn_use == "translated" else "orig"
 
     return {
-        "audio_path": os.path.join(args.audio, f"{safe_base}.wav"),
+        "audio_path": os.path.join(args.audio, f"{safe_base}.mp3"),
         "srt_path": os.path.join(args.subs, f"{safe_base}.srt"),
         "translated_srt_path": os.path.join(args.subs_lang, f"{safe_base}.{args.lang}.srt"),
         "burned_out_path": os.path.join(args.burn_out, f"{safe_base}.{lang_suffix}.burned{burned_ext}")

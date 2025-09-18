@@ -12,6 +12,16 @@ def extract_audio_ffmpeg(
     if os.path.exists(audio_path) and not overwrite:
         return
     ensure_dirs(os.path.dirname(audio_path))
+    ext = os.path.splitext(audio_path)[1].lower()
+    codec_args: list[str]
+    if ext == ".mp3":
+        codec_args = ["-c:a", "libmp3lame", "-b:a", "128k"]
+    elif ext in {".m4a", ".mp4"}:
+        codec_args = ["-c:a", "aac", "-b:a", "128k"]
+    elif ext in {".ogg", ".opus"}:
+        codec_args = ["-c:a", "libopus", "-b:a", "96k"]
+    else:
+        codec_args = ["-c:a", "pcm_s16le"]
     cmd = [
         "ffmpeg",
         "-y" if overwrite else "-n",
@@ -22,6 +32,7 @@ def extract_audio_ffmpeg(
         "-ar",
         "16000",
         "-vn",
+        *codec_args,
         audio_path,
     ]
     try:
