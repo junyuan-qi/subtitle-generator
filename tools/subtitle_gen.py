@@ -1,10 +1,13 @@
 import argparse
+import math
 import os
 import sys
 import json
 import subprocess
+import tempfile
 import time
 from collections.abc import Sequence
+from itertools import count
 from dataclasses import dataclass
 from typing import Protocol, TypedDict, cast
 
@@ -110,6 +113,11 @@ def _require_gemini():
 SUPPORTED_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm"}
 
 DEFAULT_GEMINI_TRANSLATION_BATCH_SIZE = 32
+
+OPENAI_TRANSCRIBE_MAX_CONTENT_BYTES = 26_214_400  # 25 MiB limit from OpenAI API
+OPENAI_TRANSCRIBE_SAFETY_FACTOR = 0.9  # keep chunks comfortably under the limit
+OPENAI_FALLBACK_AUDIO_BYTES_PER_SEC = 16_000  # approx for 128 kbps mono MP3
+OPENAI_MIN_CHUNK_DURATION = 1.0  # seconds; avoids zero-length slices when chunking
 
 
 def _coerce_to_int(value: object) -> int | None:
@@ -472,6 +480,183 @@ def _extract_text(data: JSONDict) -> str:
     return str(val) if val is not None else ""
 
 
+def _safe_audio_duration_seconds(path: str) -> float:
+    duration = _ffprobe_duration_seconds(path)
+    if duration is not None and duration > 0.0:
+        return duration
+
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return 0.0
+
+    approx = size / float(OPENAI_FALLBACK_AUDIO_BYTES_PER_SEC)
+    return approx if approx > 0.0 else 0.0
+
+
+def _slice_audio_with_ffmpeg(
+    source_path: str, out_path: str, start: float, duration: float | None
+) -> None:
+    ss_arg = f"{max(start, 0.0):.3f}"
+    cmd: list[str] = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        ss_arg,
+        "-i",
+        source_path,
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "128k",
+    ]
+    if duration is not None and duration > 0.0:
+        cmd += ["-t", f"{duration:.3f}"]
+    cmd.append(out_path)
+
+    try:
+        _ = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as error:
+        _write_subprocess_error(error)
+        raise
+
+
+def _split_audio_for_transcription(
+    audio_path: str, tmp_dir: str, max_bytes: int
+) -> list[tuple[str, float]]:
+    try:
+        total_size = os.path.getsize(audio_path)
+    except OSError:
+        total_size = 0
+
+    if total_size <= max_bytes:
+        return [(audio_path, 0.0)]
+
+    duration = _safe_audio_duration_seconds(audio_path)
+    if duration <= 0.0:
+        return [(audio_path, 0.0)]
+
+    safe_max_bytes = max(1, int(max_bytes * OPENAI_TRANSCRIBE_SAFETY_FACTOR))
+    chunk_count = max(2, math.ceil(total_size / safe_max_bytes))
+    base_chunk_duration = max(duration / chunk_count, OPENAI_MIN_CHUNK_DURATION)
+
+    chunks: list[tuple[str, float]] = []
+    name_counter = count()
+
+    def split_range(start: float, span: float) -> None:
+        span = max(span, OPENAI_MIN_CHUNK_DURATION)
+        if start >= duration:
+            return
+
+        remaining = max(duration - start, 0.0)
+        if span > remaining:
+            span = remaining
+        if span <= 0.0:
+            return
+
+        chunk_path = os.path.join(tmp_dir, f"chunk_{next(name_counter):04d}.mp3")
+        _slice_audio_with_ffmpeg(audio_path, chunk_path, start, span)
+
+        try:
+            chunk_size = os.path.getsize(chunk_path)
+        except OSError:
+            chunk_size = 0
+
+        if chunk_size > max_bytes and span > OPENAI_MIN_CHUNK_DURATION * 1.5:
+            os.remove(chunk_path)
+            half = span / 2.0
+            split_range(start, half)
+            split_range(start + half, span - half)
+            return
+
+        if chunk_size > max_bytes:
+            os.remove(chunk_path)
+            raise RuntimeError(
+                "Audio chunk still exceeds OpenAI size limit after splitting. "
+                "Try re-encoding with a lower bitrate."
+            )
+
+        chunks.append((chunk_path, start))
+
+    for index in range(chunk_count):
+        start = min(index * base_chunk_duration, duration)
+        if start >= duration:
+            break
+        span = base_chunk_duration if index < chunk_count - 1 else duration - start
+        split_range(start, span)
+
+    return chunks
+
+
+def _openai_transcribe_chunk(
+    client,
+    audio_path: str,
+    model: str,
+    max_attempts: int,
+) -> JSONDict:
+    transcript: object | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with open(audio_path, "rb") as file_handle:
+                if model == "whisper-1":
+                    transcript = client.audio.transcriptions.create(
+                        model=model,
+                        file=file_handle,
+                        response_format="verbose_json",
+                        timestamp_granularities=["segment"],
+                    )
+                else:
+                    transcript = client.audio.transcriptions.create(
+                        model=model,
+                        file=file_handle,
+                        response_format="text",
+                    )
+            break
+        except Exception as err:
+            if attempt >= max_attempts or not _is_retryable_openai_error(err):
+                raise
+
+            delay = min(30.0, 2.0 * (2 ** (attempt - 1)))
+            detail = str(err).strip() or err.__class__.__name__
+            print(_warn(
+                f"OpenAI request failed ({detail}). Retrying in {delay:.1f}s... [{attempt}/{max_attempts}]"
+            ))
+            time.sleep(delay)
+
+    if transcript is None:
+        raise RuntimeError("OpenAI transcription did not return a response")
+
+    return _coerce_openai_data(transcript)
+
+
+def _segments_from_transcript_dict(
+    data: JSONDict, model: str, audio_path: str
+) -> list[Segment]:
+    segments_data = _extract_segments(data)
+
+    if model != "whisper-1":
+        text = _extract_text(data)
+        dur = _safe_audio_duration_seconds(audio_path)
+        return [Segment(start=0.0, end=dur, text=text or "")]
+
+    if not segments_data:
+        dur = _safe_audio_duration_seconds(audio_path)
+        return [Segment(start=0.0, end=dur, text=_extract_text(data))]
+
+    segments: list[Segment] = []
+    for s in segments_data:
+        start = _coerce_to_float(s.get("start"), 0.0)
+        end = _coerce_to_float(s.get("end"), start)
+        text = str(s.get("text", ""))
+        segments.append(Segment(start=start, end=end, text=text))
+
+    return segments
+
+
 def transcribe_openai_verbose_json(
     audio_path: str, model: str = "whisper-1"
 ) -> list[Segment]:
@@ -488,60 +673,49 @@ def transcribe_openai_verbose_json(
     except ValueError:
         max_attempts = 3
 
-    transcript: object | None = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            with open(audio_path, "rb") as f:
-                if model == "whisper-1":
-                    transcript = client.audio.transcriptions.create(
-                        model=model,
-                        file=f,
-                        response_format="verbose_json",
-                        timestamp_granularities=["segment"],
+    try:
+        total_size = os.path.getsize(audio_path)
+    except OSError:
+        total_size = 0
+
+    max_bytes = OPENAI_TRANSCRIBE_MAX_CONTENT_BYTES
+
+    if total_size <= max_bytes:
+        data = _openai_transcribe_chunk(client, audio_path, model, max_attempts)
+        return _segments_from_transcript_dict(data, model, audio_path)
+
+    with tempfile.TemporaryDirectory(prefix="subtitle_gen_audio_split_") as tmp_dir:
+        chunks = _split_audio_for_transcription(audio_path, tmp_dir, max_bytes)
+
+        if len(chunks) == 1 and chunks[0][0] == audio_path:
+            data = _openai_transcribe_chunk(client, audio_path, model, max_attempts)
+            return _segments_from_transcript_dict(data, model, audio_path)
+
+        print(
+            _warn(
+                f"Audio exceeds OpenAI size limit ({total_size} bytes). Splitting into {len(chunks)} chunk(s)."
+            )
+        )
+
+        combined_segments: list[Segment] = []
+        for idx, (chunk_path, offset) in enumerate(chunks, start=1):
+            chunk_data = _openai_transcribe_chunk(client, chunk_path, model, max_attempts)
+            chunk_segments = _segments_from_transcript_dict(chunk_data, model, chunk_path)
+
+            if len(chunks) > 1:
+                chunk_name = os.path.basename(chunk_path)
+                print(_act(f"Transcribed chunk {idx}/{len(chunks)} ({chunk_name})"))
+
+            for segment in chunk_segments:
+                combined_segments.append(
+                    Segment(
+                        start=segment.start + offset,
+                        end=segment.end + offset,
+                        text=segment.text,
                     )
-                else:
-                    # gpt-4o(-mini)-transcribe support only text/json; no segments
-                    transcript = client.audio.transcriptions.create(
-                        model=model,
-                        file=f,
-                        response_format="text",
-                    )
-            break
-        except Exception as err:
-            if attempt >= max_attempts or not _is_retryable_openai_error(err):
-                raise
+                )
 
-            delay = min(30.0, 2.0 * (2 ** (attempt - 1)))
-            detail = str(err).strip() or err.__class__.__name__
-            print(_warn(f"OpenAI request failed ({detail}). Retrying in {delay:.1f}s... [{attempt}/{max_attempts}]"))
-            time.sleep(delay)
-
-    if transcript is None:
-        raise RuntimeError("OpenAI transcription did not return a response")
-
-    # Convert SDK response to plain dict
-    data: JSONDict = _coerce_openai_data(transcript)
-    segments_data = _extract_segments(data)
-
-    if model != "whisper-1":
-        # Build a single segment spanning the audio duration
-        text = _extract_text(data)
-        dur = _ffprobe_duration_seconds(audio_path) or 0.0
-        return [Segment(start=0.0, end=dur, text=text or "")]
-
-    if not segments_data:
-        # Fallback: no segments from whisper; single full segment with duration
-        dur = _ffprobe_duration_seconds(audio_path) or 0.0
-        return [Segment(start=0.0, end=dur, text=_extract_text(data))]
-
-    segments: list[Segment] = []
-    for s in segments_data:
-        start = _coerce_to_float(s.get("start"), 0.0)
-        end = _coerce_to_float(s.get("end"), start)
-        text = str(s.get("text", ""))
-        segments.append(Segment(start=start, end=end, text=text))
-
-    return segments
+    return combined_segments
 
 
 def _normalize_gemini_model_name(name: str) -> str:

@@ -1,6 +1,8 @@
 import os
 import sys
 import subprocess
+import tempfile
+import shutil
 
 from .fs_utils import ensure_dirs
 
@@ -44,7 +46,28 @@ def extract_audio_ffmpeg(
 
 
 def _ffmpeg_filter_quote(value: str) -> str:
-    return "'" + str(value).replace("'", r"\'") + "'"
+    """Quote a filter argument value for ffmpeg.
+
+    Uses single quotes by default. If the value contains a single quote but not
+    a double quote, prefer double quotes to avoid heavy escaping.
+    """
+    s = str(value)
+    if "'" in s and '"' not in s:
+        # Escape backslashes and double quotes inside double-quoted string
+        s = s.replace("\\", r"\\").replace('"', r"\\\"")
+        return '"' + s + '"'
+    # Escape single quotes inside single-quoted string
+    return "'" + s.replace("'", r"\'") + "'"
+
+
+def _quote_style_value(value: str) -> str:
+    """Return value, only quoting if truly necessary (commas/colons/quotes)."""
+    # Spaces are safe in ASS style values; avoid adding nested quotes.
+    needs_quote = any(ch in value for ch in ":;'\",")
+    if not needs_quote:
+        return value
+    escaped = value.replace("\\", r"\\").replace("\"", r"\\\"")
+    return f'"{escaped}"'
 
 
 def _build_subtitle_style(
@@ -53,9 +76,9 @@ def _build_subtitle_style(
     """Build the force_style parameter for subtitle rendering."""
     style_parts: list[str] = []
     if font:
-        style_parts.append(f"FontName={font}")
+        style_parts.append(f"Fontname={_quote_style_value(str(font))}")
     if font_size:
-        style_parts.append(f"FontSize={int(font_size)}")
+        style_parts.append(f"Fontsize={int(font_size)}")
     if margin_v:
         style_parts.append(f"MarginV={int(margin_v)}")
     return ",".join(style_parts) if style_parts else None
@@ -102,20 +125,77 @@ def burn_subtitles_ffmpeg(
     if out_dir:
         ensure_dirs(out_dir)
 
-    force_style = _build_subtitle_style(font, font_size, margin_v)
-    subtitle_filter = _build_subtitle_filter(srt_path, fonts_dir, force_style)
-    cmd = _build_ffmpeg_command(video_path, subtitle_filter, out_path, show_progress)
+    def _run(cmd: list[str]):
+        return subprocess.run(
+            cmd,
+            check=True,
+            stdout=None if show_progress else subprocess.PIPE,
+            stderr=None if show_progress else subprocess.PIPE,
+        )
 
+    # If the SRT path has tricky quote characters, copy to a safe temp file name.
+    tmp_srt_path: str | None = None
     try:
-        if show_progress:
-            _ = subprocess.run(cmd, check=True)
+        if any(ch in srt_path for ch in "'\""):
+            tmp_dir = tempfile.mkdtemp(prefix="subtitle_gen_srt_")
+            tmp_srt_path = os.path.join(tmp_dir, "input.srt")
+            try:
+                shutil.copyfile(srt_path, tmp_srt_path)
+                srt_for_filter = tmp_srt_path
+            except Exception:
+                # If copy fails, fall back to original path
+                srt_for_filter = srt_path
         else:
-            _ = subprocess.run(
-                cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
+            srt_for_filter = srt_path
+
+        force_style = _build_subtitle_style(font, font_size, margin_v)
+        subtitle_filter = _build_subtitle_filter(srt_for_filter, fonts_dir, force_style)
+        cmd = _build_ffmpeg_command(video_path, subtitle_filter, out_path, show_progress)
+        _ = _run(cmd)
     except subprocess.CalledProcessError as e:
-        _handle_ffmpeg_error(e)
-        raise
+        # If parsing failed due to style, retry without force_style as a fallback.
+        stderr_text = ""
+        try:
+            if isinstance(e.stderr, (bytes, bytearray)):
+                stderr_text = bytes(e.stderr).decode(errors="ignore")
+        except Exception:
+            pass
+
+        parse_fail = any(
+            token in stderr_text
+            for token in (
+                "Error parsing a filter description",
+                "Error parsing filterchain",
+                "No option name near",
+            )
+        )
+
+        if parse_fail and ":force_style=" in subtitle_filter:
+            # Build a simplified filter without force_style
+            simplified = subtitle_filter.split(":force_style=", 1)[0]
+            fallback_cmd = _build_ffmpeg_command(
+                video_path, simplified, out_path, show_progress
+            )
+            try:
+                _ = _run(fallback_cmd)
+                return
+            except subprocess.CalledProcessError as e2:
+                _handle_ffmpeg_error(e2)
+                raise
+        else:
+            _handle_ffmpeg_error(e)
+            raise
+    finally:
+        if tmp_srt_path:
+            try:
+                os.remove(tmp_srt_path)
+            except Exception:
+                pass
+            tmp_dir = os.path.dirname(tmp_srt_path)
+            try:
+                os.rmdir(tmp_dir)
+            except Exception:
+                pass
 
 
 def detect_default_font() -> dict[str, str | None]:
